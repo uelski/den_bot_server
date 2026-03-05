@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from app.graph.state import AgentState
 from app.prompts.grader_prompt import GRADER_HUMAN, GRADER_SYSTEM
 
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 class GraderOutput(BaseModel):

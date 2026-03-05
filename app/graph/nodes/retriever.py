@@ -16,7 +16,7 @@ TOP_K = 5
 @lru_cache(maxsize=1)
 def _get_vector_store() -> QdrantVectorStore:
     """Singleton Qdrant store — avoids re-creating connections per call."""
-    dense = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
+    dense = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
     sparse = FastEmbedSparse(model_name="Qdrant/bm25")
     return QdrantVectorStore.from_existing_collection(
         embedding=dense,

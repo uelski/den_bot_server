@@ -8,7 +8,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from app.graph.state import AgentState
 from app.prompts.rewriter_prompt import REWRITER_HUMAN, REWRITER_SYSTEM
 
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 def rewriter(state: AgentState) -> dict:

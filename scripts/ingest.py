@@ -1,17 +1,20 @@
 import json
 import os
+from dotenv import load_dotenv
 from langchain_qdrant import QdrantVectorStore, RetrievalMode, FastEmbedSparse
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_core.documents import Document
 
+load_dotenv()
+
 # 1. Configuration - Point to your local Docker Qdrant
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = "denver_gis_catalog"
 
 def ingest_data():
     # 2. Initialize Embeddings
     # Dense: Captures meaning (2026 stable version)
-    dense_embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
+    dense_embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
     
     # Sparse: Captures keywords (BM25) - Runs locally via FastEmbed
     sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
@@ -32,8 +35,7 @@ def ingest_data():
             page_content=item['semantic_summary'],
             metadata={
                 "service_name": item['service_name'],
-                "agency": item.get('agency', 'Unknown'),
-                "base_url": item['base_url'], 
+                "base_url": item['base_url'],
                 "has_layers": len(item.get('layers', [])) > 0,
                 "full_metadata": json.dumps(item)
             }

@@ -13,7 +13,7 @@ from app.prompts.generator_prompt import (
     GENERATOR_SYSTEM_STANDARD,
 )
 
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 def _format_docs(docs) -> str:
