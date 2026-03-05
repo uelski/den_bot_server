@@ -12,6 +12,8 @@ httpx                      # async HTTP for scraping agent
 python-dotenv              # .env loading
 pydantic>=2.0              # FastAPI v2 uses pydantic v2
 sse-starlette              # streaming responses from FastAPI
+dotenv
+fastembed
 
 # Recommended for robustness
 tenacity                   # retry logic for LLM/scraping calls
