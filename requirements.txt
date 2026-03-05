@@ -1,0 +1,18 @@
+langchain
+langchain-qdrant
+langchain-google-genai
+langgraph
+fastapi
+uvicorn
+bs4
+langchain-community        # needed for many LC utilities
+qdrant-client              # explicit client, langchain-qdrant depends on it
+fastembed                  # FastEmbedSparse needs this explicitly
+httpx                      # async HTTP for scraping agent
+python-dotenv              # .env loading
+pydantic>=2.0              # FastAPI v2 uses pydantic v2
+sse-starlette              # streaming responses from FastAPI
+
+# Recommended for robustness
+tenacity                   # retry logic for LLM/scraping calls
+structlog  

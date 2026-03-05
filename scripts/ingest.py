@@ -17,7 +17,9 @@ def ingest_data():
     sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
 
     # 3. Load your cleaned JSON
-    with open("enriched_denver_catalog_cleaned.json", "r") as f:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    DATA_PATH = os.path.join(BASE_DIR, "..", "data", "enriched_denver_catalog_cleaned.json")
+    with open(DATA_PATH, "r") as f:
         raw_data = json.load(f)
 
     print(f"📂 Loaded {len(raw_data)} services. Preparing documents...")
@@ -31,7 +33,9 @@ def ingest_data():
             metadata={
                 "service_name": item['service_name'],
                 "agency": item.get('agency', 'Unknown'),
-                "full_metadata": json.dumps(item) # The "Parent" data for the Agent
+                "base_url": item['base_url'], 
+                "has_layers": len(item.get('layers', [])) > 0,
+                "full_metadata": json.dumps(item)
             }
         )
         docs.append(doc)

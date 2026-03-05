@@ -9,3 +9,4 @@
 .env.production
 notes.txt
 qdrant_storage/
+.DS_Store
