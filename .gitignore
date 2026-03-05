@@ -10,3 +10,9 @@
 notes.txt
 qdrant_storage/
 .DS_Store
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+*.egg-info/
+*.pyc
