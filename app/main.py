@@ -2,11 +2,13 @@
 
 import json
 import logging
+import os
 
 from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -15,6 +17,15 @@ from app.graph.orchestrator import graph
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Denver Open Data RAG")
+
+origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class QueryBody(BaseModel):
