@@ -9,6 +9,7 @@ from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
 from app.graph.state import AgentState
 
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "denver_gis_catalog")
 TOP_K = 5
 
@@ -22,6 +23,7 @@ def _get_vector_store() -> QdrantVectorStore:
         embedding=dense,
         sparse_embedding=sparse,
         url=QDRANT_URL,
+        api_key=QDRANT_API_KEY,
         collection_name=COLLECTION_NAME,
         retrieval_mode=RetrievalMode.HYBRID,
     )

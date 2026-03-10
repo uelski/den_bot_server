@@ -7,8 +7,9 @@ from langchain_core.documents import Document
 
 load_dotenv()
 
-# 1. Configuration - Point to your local Docker Qdrant
+# 1. Configuration
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 COLLECTION_NAME = "denver_gis_catalog"
 
 def ingest_data():
@@ -50,6 +51,7 @@ def ingest_data():
         embedding=dense_embeddings,
         sparse_embedding=sparse_embeddings,
         url=QDRANT_URL,
+        api_key=QDRANT_API_KEY,
         collection_name=COLLECTION_NAME,
         retrieval_mode=RetrievalMode.HYBRID,
         force_recreate=True  # Useful for testing; set to False later
