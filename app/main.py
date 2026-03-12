@@ -53,7 +53,6 @@ async def query_endpoint(body: QueryBody):
     async def event_stream():
         try:
             async for event in graph.astream_events(initial_state, version="v2"):
-                event_name = event.get("name", "")
                 event_type = event.get("event", "")
                 metadata = event.get("metadata", {})
                 node = metadata.get("langgraph_node", "")
@@ -64,6 +63,22 @@ async def query_endpoint(body: QueryBody):
                     if chunk and hasattr(chunk, "content") and chunk.content:
                         payload = json.dumps({"text": chunk.content})
                         yield f"event: token\ndata: {payload}\n\n"
+
+                # Retriever finished — emit sources
+                elif event_type == "on_chain_end" and node == "retriever":
+                    output = event.get("data", {}).get("output", {})
+                    docs = output.get("retrieved_docs", []) if output else []
+                    sources = [
+                        {
+                            "service_name": d.metadata.get("service_name"),
+                            "base_url": d.metadata.get("base_url"),
+                        }
+                        for d in docs
+                        if d.metadata.get("base_url")
+                    ]
+                    if sources:
+                        payload = json.dumps({"sources": sources})
+                        yield f"event: sources\ndata: {payload}\n\n"
 
                 # Scraper finished — emit map_viewer_url if present
                 elif event_type == "on_chain_end" and node == "scraper":

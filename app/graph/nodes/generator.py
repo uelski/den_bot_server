@@ -18,9 +18,7 @@ MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 def _format_docs(docs) -> str:
     return "\n\n---\n\n".join(
-        f"[{d.metadata.get('service_name', 'Unknown')}]\n"
-        f"URL: {d.metadata.get('base_url', 'N/A')}\n\n"
-        f"{d.page_content}"
+        f"[{d.metadata.get('service_name', 'Unknown')}]\n{d.page_content}"
         for d in docs
     )
 
