@@ -16,3 +16,4 @@ __pycache__/
 .env
 *.egg-info/
 *.pyc
+enriched_denver_catalog_v2.json
