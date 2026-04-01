@@ -24,4 +24,4 @@ class AgentState(TypedDict):
 
     # Scraper outputs — populated concurrently while generator streams
     scraped_layer_data: dict[str, Any] | None
-    map_viewer_url: str | None  # emitted as a custom SSE event for the frontend
+    map_viewer_urls: list[str]  # hub page URLs + optional scraped viewer URL

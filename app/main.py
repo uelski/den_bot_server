@@ -47,7 +47,7 @@ async def query_endpoint(body: QueryBody):
         "needs_scrape": False,
         "retry_count": 0,
         "scraped_layer_data": None,
-        "map_viewer_url": None,
+        "map_viewer_urls": [],
     }
 
     async def event_stream():
@@ -72,6 +72,7 @@ async def query_endpoint(body: QueryBody):
                         {
                             "service_name": d.metadata.get("service_name"),
                             "base_url": d.metadata.get("base_url"),
+                            **({"hub_url": d.metadata["hub_url"]} if d.metadata.get("hub_url") else {}),
                         }
                         for d in docs
                         if d.metadata.get("base_url")
@@ -80,12 +81,22 @@ async def query_endpoint(body: QueryBody):
                         payload = json.dumps({"sources": sources})
                         yield f"event: sources\ndata: {payload}\n\n"
 
-                # Scraper finished — emit map_viewer_url if present
+                    # Emit hub_urls as map_viewer links (scraper may add more later)
+                    hub_urls = [
+                        d.metadata["hub_url"].rstrip("/").removesuffix("/about")
+                        for d in docs
+                        if d.metadata.get("hub_url")
+                    ]
+                    if hub_urls:
+                        payload = json.dumps({"urls": hub_urls})
+                        yield f"event: map_viewer\ndata: {payload}\n\n"
+
+                # Scraper finished — emit map_viewer_urls if present
                 elif event_type == "on_chain_end" and node == "scraper":
                     output = event.get("data", {}).get("output", {})
-                    map_url = output.get("map_viewer_url") if output else None
-                    if map_url:
-                        payload = json.dumps({"url": map_url})
+                    map_urls = output.get("map_viewer_urls", []) if output else []
+                    if map_urls:
+                        payload = json.dumps({"urls": map_urls})
                         yield f"event: map_viewer\ndata: {payload}\n\n"
 
         except Exception as exc:

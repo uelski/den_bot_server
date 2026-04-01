@@ -22,7 +22,7 @@ def ingest_data():
 
     # 3. Load your cleaned JSON
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    DATA_PATH = os.path.join(BASE_DIR, "..", "data", "enriched_denver_catalog_cleaned.json")
+    DATA_PATH = os.path.join(BASE_DIR, "..", "data", "enriched_denver_catalog_v2.json")
     with open(DATA_PATH, "r") as f:
         raw_data = json.load(f)
 
@@ -38,7 +38,9 @@ def ingest_data():
                 "service_name": item['service_name'],
                 "base_url": item['base_url'],
                 "has_layers": len(item.get('layers', [])) > 0,
-                "full_metadata": json.dumps(item)
+                "full_metadata": json.dumps(item),
+                "hub_url": item.get("hub_url"),
+                "service_item_id": item.get("service_item_id"),
             }
         )
         docs.append(doc)

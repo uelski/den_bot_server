@@ -44,19 +44,19 @@ async def scraper(state: AgentState) -> dict[str, Any]:
     doc = _find_first_layers_doc(state)
     if doc is None:
         logger.warning("scraper: no document with has_layers=True found")
-        return {"scraped_layer_data": None, "map_viewer_url": None}
+        return {"scraped_layer_data": None, "map_viewer_urls": []}
 
     base_url = doc.metadata.get("base_url", "")
     layer_id, fields = _extract_layer_info(doc)
 
     if not base_url or layer_id is None:
         logger.warning("scraper: missing base_url or layer_id — skipping scrape")
-        return {"scraped_layer_data": None, "map_viewer_url": None}
+        return {"scraped_layer_data": None, "map_viewer_urls": []}
 
     # Build the ArcGIS layer page URL (HTML, not JSON)
     layer_page_url = f"{base_url}/{layer_id}"
 
-    map_viewer_url = None
+    scraped_viewer_url = None
     try:
         async with httpx.AsyncClient(timeout=SCRAPE_TIMEOUT, follow_redirects=True) as client:
             resp = await client.get(layer_page_url)
@@ -67,7 +67,7 @@ async def scraper(state: AgentState) -> dict[str, Any]:
         if view_section:
             anchor = view_section.find("a", href=True)
             if anchor:
-                map_viewer_url = anchor["href"]
+                scraped_viewer_url = anchor["href"]
             else:
                 logger.warning("scraper: #viewInSection found but no <a> tag inside")
         else:
@@ -87,5 +87,5 @@ async def scraper(state: AgentState) -> dict[str, Any]:
 
     return {
         "scraped_layer_data": scraped_layer_data,
-        "map_viewer_url": map_viewer_url,
+        "map_viewer_urls": [scraped_viewer_url] if scraped_viewer_url else [],
     }
