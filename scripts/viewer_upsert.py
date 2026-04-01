@@ -39,7 +39,7 @@ def upsert_hub_urls():
                 scroll_filter=Filter(
                     must=[
                         FieldCondition(
-                            key="service_name",
+                            key="metadata.service_name",
                             match=MatchValue(value=service_name),
                         )
                     ]
@@ -63,11 +63,24 @@ def upsert_hub_urls():
         # Patch payload — sets both fields regardless of None so agent
         # can always do a simple null check without KeyError
         try:
+            client.delete_payload(
+                collection_name=COLLECTION_NAME,
+                keys=["metadata.hub_url", "metadata.service_item_id"],
+                points=[point_id],
+            )
+
+            # Write the complete correct metadata object
             client.set_payload(
                 collection_name=COLLECTION_NAME,
                 payload={
-                    "hub_url": hub_url,
-                    "service_item_id": service_item_id,
+                    "metadata": {
+                        "service_name": item.get("service_name"),
+                        "base_url": item.get("base_url"),
+                        "has_layers": len(item.get("layers", [])) > 0,
+                        "hub_url": item.get("hub_url"),
+                        "service_item_id": item.get("service_item_id"),
+                        "full_metadata": json.dumps(item),
+                    }
                 },
                 points=[point_id],
             )
