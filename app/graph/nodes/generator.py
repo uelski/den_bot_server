@@ -17,10 +17,15 @@ MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 def _format_docs(docs) -> str:
-    return "\n\n---\n\n".join(
-        f"[{d.metadata.get('service_name', 'Unknown')}]\n{d.page_content}"
-        for d in docs
-    )
+    parts = []
+    for d in docs:
+        name = d.metadata.get("service_name", "Unknown")
+        hub_url = d.metadata.get("hub_url")
+        header = f"[{name}]"
+        if hub_url:
+            header += f" (Hub page: {hub_url})"
+        parts.append(f"{header}\n{d.page_content}")
+    return "\n\n---\n\n".join(parts)
 
 
 async def generator(state: AgentState) -> dict:
