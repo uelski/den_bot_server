@@ -82,21 +82,30 @@ async def query_endpoint(body: QueryBody):
                         yield f"event: sources\ndata: {payload}\n\n"
 
                     # Emit hub_urls as map_viewer links (scraper may add more later)
-                    hub_urls = [
-                        d.metadata["hub_url"].rstrip("/").removesuffix("/about")
+                    hub_links = [
+                        {
+                            "url": d.metadata["hub_url"].rstrip("/").removesuffix("/about"),
+                            "label": f"View {d.metadata.get('service_name', 'data')} map",
+                        }
                         for d in docs
                         if d.metadata.get("hub_url")
                     ]
-                    if hub_urls:
-                        payload = json.dumps({"urls": hub_urls})
+                    if hub_links:
+                        payload = json.dumps({"urls": hub_links})
                         yield f"event: map_viewer\ndata: {payload}\n\n"
 
-                # Scraper finished — emit map_viewer_urls if present
+                # Scraper finished — emit scraped map_viewer_url if present
                 elif event_type == "on_chain_end" and node == "scraper":
                     output = event.get("data", {}).get("output", {})
+                    scraped_data = output.get("scraped_layer_data") if output else None
                     map_urls = output.get("map_viewer_urls", []) if output else []
                     if map_urls:
-                        payload = json.dumps({"urls": map_urls})
+                        service_name = scraped_data.get("service_name", "data") if scraped_data else "data"
+                        scraped_links = [
+                            {"url": url, "label": f"View {service_name} map"}
+                            for url in map_urls
+                        ]
+                        payload = json.dumps({"urls": scraped_links})
                         yield f"event: map_viewer\ndata: {payload}\n\n"
 
         except Exception as exc:
