@@ -17,6 +17,12 @@ from app.graph.state import AgentState
 # ---------------------------------------------------------------------------
 
 
+def route_after_router(state: AgentState) -> str:
+    if state["requires_rag"]:
+        return "retriever"
+    return "generate"
+
+
 def route_after_grader(state: AgentState) -> str:
     if not state["docs_relevant"]:
         return "rewrite" if state["retry_count"] < 2 else "generate"
@@ -46,9 +52,16 @@ def build_graph():
     builder.add_node("generate", generator)
     builder.add_node("scraper", scraper)
 
-    # Entry
+    # Entry — router decides RAG vs direct LLM
     builder.add_edge(START, "main_router")
-    builder.add_edge("main_router", "retriever")
+    builder.add_conditional_edges(
+        "main_router",
+        route_after_router,
+        {
+            "retriever": "retriever",
+            "generate": "generate",
+        },
+    )
     builder.add_edge("retriever", "grader")
 
     # After grader: retry loop or proceed to intent classification

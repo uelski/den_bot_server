@@ -12,6 +12,9 @@ class AgentState(TypedDict):
     # Current user query (may be rewritten on retry)
     query: str
 
+    # Gate: True when query needs RAG retrieval, False for general conversation
+    requires_rag: bool
+
     # Docs returned from Qdrant hybrid search
     retrieved_docs: list[Document]
 

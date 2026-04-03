@@ -42,6 +42,7 @@ async def query_endpoint(body: QueryBody):
     initial_state = {
         "query": body.query,
         "messages": [],
+        "requires_rag": True,
         "retrieved_docs": [],
         "docs_relevant": None,
         "needs_scrape": False,

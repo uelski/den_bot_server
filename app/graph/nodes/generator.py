@@ -9,6 +9,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from app.graph.state import AgentState
 from app.prompts.generator_prompt import (
     GENERATOR_HUMAN,
+    GENERATOR_SYSTEM_GENERAL,
     GENERATOR_SYSTEM_HEDGE,
     GENERATOR_SYSTEM_STANDARD,
 )
@@ -29,10 +30,13 @@ def _format_docs(docs) -> str:
 
 
 async def generator(state: AgentState) -> dict:
-    """Stream an LLM response; use hedge prompt when needs_scrape=True."""
-    system_prompt = (
-        GENERATOR_SYSTEM_HEDGE if state.get("needs_scrape") else GENERATOR_SYSTEM_STANDARD
-    )
+    """Stream an LLM response; select prompt based on query path."""
+    if not state.get("requires_rag"):
+        system_prompt = GENERATOR_SYSTEM_GENERAL
+    elif state.get("needs_scrape"):
+        system_prompt = GENERATOR_SYSTEM_HEDGE
+    else:
+        system_prompt = GENERATOR_SYSTEM_STANDARD
 
     llm = ChatGoogleGenerativeAI(model=MODEL, temperature=0.2, streaming=True)
 
