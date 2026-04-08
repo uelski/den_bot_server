@@ -1,0 +1,22 @@
+services:
+  qdrant:
+    image: qdrant/qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: blue_cypher
+      POSTGRES_PASSWORD: blue_cypher
+      POSTGRES_DB: blue_cypher_data
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_storage:/var/lib/postgresql/data
+
+volumes:
+  qdrant_storage:
+  postgres_storage:
