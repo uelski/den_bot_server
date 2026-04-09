@@ -16,7 +16,7 @@ COLLECTION_NAME = "denver_gis_catalog"
 
 # The exact service_name value as it appears in your Qdrant metadata
 SERVICE_NAMES = [
-    "ODC_POP_ACS20172021NBRHDCOMMON_A"
+    "ODC_POP_ACS20172021NBRHDCOMMON_A",
     "ACS20192023NBHD_POPINDICATORS2023",
     "ACS20192023TRACT_POPINDICATORS2023",
     "Air_Quality_Index_Layers_WFL1",
