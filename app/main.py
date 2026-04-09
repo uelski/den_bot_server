@@ -46,6 +46,9 @@ async def query_endpoint(body: QueryBody):
         "retrieved_docs": [],
         "docs_relevant": None,
         "needs_scrape": False,
+        "needs_pg_query": False,
+        "pg_table": None,
+        "pg_query_results": None,
         "retry_count": 0,
         "scraped_layer_data": None,
         "map_viewer_urls": [],
@@ -94,6 +97,16 @@ async def query_endpoint(body: QueryBody):
                     if hub_links:
                         payload = json.dumps({"urls": hub_links})
                         yield f"event: map_viewer\ndata: {payload}\n\n"
+
+                # Postgres query finished — emit row count
+                elif event_type == "on_chain_end" and node == "pg_query":
+                    output = event.get("data", {}).get("output", {})
+                    if not isinstance(output, dict):
+                        continue
+                    results = output.get("pg_query_results")
+                    if results is not None:
+                        payload = json.dumps({"row_count": len(results), "status": "complete"})
+                        yield f"event: pg_data\ndata: {payload}\n\n"
 
                 # Scraper finished — emit scraped map_viewer_url if present
                 elif event_type == "on_chain_end" and node == "scraper":

@@ -17,22 +17,35 @@ class IntentOutput(BaseModel):
 
 
 def intent_router(state: AgentState) -> dict:
-    """Set needs_scrape=True when query needs map/field detail AND a layer doc is available."""
-    # Check if any retrieved doc has has_layers=True
+    """Set independent flags: needs_pg_query and needs_scrape."""
+    # pg_table check — pure metadata, no LLM call
+    pg_doc = next(
+        (doc for doc in state["retrieved_docs"] if doc.metadata.get("pg_table")),
+        None,
+    )
+    needs_pg = pg_doc is not None
+    pg_table = pg_doc.metadata["pg_table"] if pg_doc else None
+
+    # has_layers check — existing LLM intent classification
     has_layers_doc = any(
         doc.metadata.get("has_layers", False) for doc in state["retrieved_docs"]
     )
 
-    if not has_layers_doc:
-        return {"needs_scrape": False}
+    needs_scrape = False
+    if has_layers_doc:
+        llm = ChatGoogleGenerativeAI(model=MODEL, temperature=0)
+        structured_llm = llm.with_structured_output(IntentOutput)
 
-    llm = ChatGoogleGenerativeAI(model=MODEL, temperature=0)
-    structured_llm = llm.with_structured_output(IntentOutput)
+        prompt = ChatPromptTemplate.from_messages(
+            [("system", INTENT_SYSTEM), ("human", INTENT_HUMAN)]
+        )
+        chain = prompt | structured_llm
 
-    prompt = ChatPromptTemplate.from_messages(
-        [("system", INTENT_SYSTEM), ("human", INTENT_HUMAN)]
-    )
-    chain = prompt | structured_llm
+        result: IntentOutput = chain.invoke({"query": state["query"]})
+        needs_scrape = result.needs_map
 
-    result: IntentOutput = chain.invoke({"query": state["query"]})
-    return {"needs_scrape": result.needs_map}
+    return {
+        "needs_pg_query": needs_pg,
+        "pg_table": pg_table,
+        "needs_scrape": needs_scrape,
+    }

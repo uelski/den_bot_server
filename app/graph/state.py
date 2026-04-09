@@ -25,6 +25,11 @@ class AgentState(TypedDict):
     # Retry tracking for query rewrite loop (max 2)
     retry_count: int
 
+    # Postgres query path
+    needs_pg_query: bool
+    pg_table: str | None
+    pg_query_results: list[dict] | None
+
     # Scraper outputs — populated concurrently while generator streams
     scraped_layer_data: dict[str, Any] | None
     map_viewer_urls: list[str]  # hub page URLs + optional scraped viewer URL

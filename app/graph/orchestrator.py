@@ -5,6 +5,7 @@ from langgraph.graph import END, START, StateGraph
 from app.graph.nodes.generator import generator
 from app.graph.nodes.grader import grader
 from app.graph.nodes.intent_router import intent_router
+from app.graph.nodes.pg_query import pg_query
 from app.graph.nodes.retriever import retriever
 from app.graph.nodes.rewriter import rewriter
 from app.graph.nodes.router import main_router
@@ -30,6 +31,17 @@ def route_after_grader(state: AgentState) -> str:
 
 
 def route_after_intent(state: AgentState) -> list[str]:
+    """Composable fan-out: pg_query and/or scraper+generate, or just generate."""
+    if state["needs_pg_query"]:
+        # pg_query runs first; it has its own conditional edge to generate (+scraper)
+        return ["pg_query"]
+    if state["needs_scrape"]:
+        return ["generate", "scraper"]
+    return ["generate"]
+
+
+def route_after_pg_query(state: AgentState) -> list[str]:
+    """After pg_query completes, fan out to generate (+ scraper if needed)."""
     if state["needs_scrape"]:
         return ["generate", "scraper"]
     return ["generate"]
@@ -51,6 +63,7 @@ def build_graph():
     builder.add_node("rewriter", rewriter)
     builder.add_node("generate", generator)
     builder.add_node("scraper", scraper)
+    builder.add_node("pg_query", pg_query)
 
     # Entry — router decides RAG vs direct LLM
     builder.add_edge(START, "main_router")
@@ -78,10 +91,17 @@ def build_graph():
     # Retry loop back to retriever
     builder.add_edge("rewriter", "retriever")
 
-    # After intent router: single generate or parallel fan-out
+    # After intent router: composable fan-out
     builder.add_conditional_edges(
         "intent_router",
         route_after_intent,
+        ["pg_query", "generate", "scraper"],
+    )
+
+    # After pg_query: generate alone or generate+scraper in parallel
+    builder.add_conditional_edges(
+        "pg_query",
+        route_after_pg_query,
         ["generate", "scraper"],
     )
 
