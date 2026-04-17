@@ -17,16 +17,7 @@ class IntentOutput(BaseModel):
 
 
 def intent_router(state: AgentState) -> dict:
-    """Set independent flags: needs_pg_query and needs_scrape."""
-    # pg_table check — pure metadata, no LLM call
-    pg_doc = next(
-        (doc for doc in state["retrieved_docs"] if doc.metadata.get("pg_table")),
-        None,
-    )
-    needs_pg = pg_doc is not None
-    pg_table = pg_doc.metadata["pg_table"] if pg_doc else None
-
-    # has_layers check — existing LLM intent classification
+    """Set needs_scrape based on has_layers metadata + LLM intent classification."""
     has_layers_doc = any(
         doc.metadata.get("has_layers", False) for doc in state["retrieved_docs"]
     )
@@ -44,8 +35,4 @@ def intent_router(state: AgentState) -> dict:
         result: IntentOutput = chain.invoke({"query": state["query"]})
         needs_scrape = result.needs_map
 
-    return {
-        "needs_pg_query": needs_pg,
-        "pg_table": pg_table,
-        "needs_scrape": needs_scrape,
-    }
+    return {"needs_scrape": needs_scrape}

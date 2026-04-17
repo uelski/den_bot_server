@@ -17,6 +17,5 @@ fastembed
 
 # Recommended for robustness
 tenacity                   # retry logic for LLM/scraping calls
-structlog  
-psycopg2-binary
-sqlalchemy
+structlog
+

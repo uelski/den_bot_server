@@ -53,23 +53,16 @@ State → Retrieve → Grade → [Generate | Scrape → Generate]
 ## Databases
 ### Qdrant (vector search)
 - Collection: denver_gis_catalog
-- Hybrid search: dense (Google text-embedding-004) + sparse (BM25)
+- Hybrid search: dense (Google gemini-embedding-001) + sparse (BM25)
 - Key metadata fields per point:
   - service_name, base_url, has_layers, hub_url, service_item_id, full_metadata
-  - pg_table (str | None) — if set, agent should query Postgres instead of ArcGIS live
-  - topic (str | None) — e.g. "demographics"
-  - is_current (bool | None) — marks authoritative/current datasets
+  - doc_type (str | None) — e.g. "neighborhood_demographics" tags the per-neighborhood ACS summary chunks
+  - neighborhood_name, neighborhood_id, district_num, topic — set on neighborhood_demographics docs
 
-### Postgres
-- DB: blue_cypher_data
-- Table: neighborhood_demographics
-- 178 rows, one per Denver neighborhood
-- Key columns: NBHD_NAME (text, indexed), NBHD_ID, DIST_NUM, Nmbr_Population,
-  Nmbr_PerCapitaIncome, Pct_PopulationInPoverty, Pct_PopulationMinority etc.
-- Connection: POSTGRES_URL in .env
+Demographics are ingested as per-neighborhood, per-topic NL summary chunks
+(see `scripts/generate_neighborhood_summaries.py` and `scripts/ingest_neighborhoods.py`).
 
 ## Agent Routing Logic
 After retrieval and grading, route based on metadata:
-1. pg_table is set → query Postgres with LLM-generated WHERE clause → generate
-2. has_layers=True, no pg_table → scrape ArcGIS live → generate
-3. default → generate with hub_url or base_url as reference link
+1. has_layers=True → scrape ArcGIS live → generate
+2. default → generate with hub_url or base_url as reference link

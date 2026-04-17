@@ -46,9 +46,6 @@ async def query_endpoint(body: QueryBody):
         "retrieved_docs": [],
         "docs_relevant": None,
         "needs_scrape": False,
-        "needs_pg_query": False,
-        "pg_table": None,
-        "pg_query_results": None,
         "retry_count": 0,
         "scraped_layer_data": None,
         "map_viewer_urls": [],
@@ -85,28 +82,25 @@ async def query_endpoint(body: QueryBody):
                         payload = json.dumps({"sources": sources})
                         yield f"event: sources\ndata: {payload}\n\n"
 
-                    # Emit hub_urls as map_viewer links (scraper may add more later)
-                    hub_links = [
-                        {
-                            "url": d.metadata["hub_url"].rstrip("/").removesuffix("/about"),
+                    # Emit hub_urls as map_viewer links (scraper may add more later);
+                    # dedupe by URL so multiple chunks from one dataset emit once.
+                    seen_urls: set[str] = set()
+                    hub_links = []
+                    for d in docs:
+                        hub_url = d.metadata.get("hub_url")
+                        if not hub_url:
+                            continue
+                        url = hub_url.rstrip("/").removesuffix("/about")
+                        if url in seen_urls:
+                            continue
+                        seen_urls.add(url)
+                        hub_links.append({
+                            "url": url,
                             "label": f"View {d.metadata.get('service_name', 'data')} map",
-                        }
-                        for d in docs
-                        if d.metadata.get("hub_url")
-                    ]
+                        })
                     if hub_links:
                         payload = json.dumps({"urls": hub_links})
                         yield f"event: map_viewer\ndata: {payload}\n\n"
-
-                # Postgres query finished — emit row count
-                elif event_type == "on_chain_end" and node == "pg_query":
-                    output = event.get("data", {}).get("output", {})
-                    if not isinstance(output, dict):
-                        continue
-                    results = output.get("pg_query_results")
-                    if results is not None:
-                        payload = json.dumps({"row_count": len(results), "status": "complete"})
-                        yield f"event: pg_data\ndata: {payload}\n\n"
 
                 # Scraper finished — emit scraped map_viewer_url if present
                 elif event_type == "on_chain_end" and node == "scraper":
