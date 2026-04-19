@@ -30,6 +30,7 @@ def route_after_grader(state: AgentState) -> str:
 
 
 def route_after_intent(state: AgentState) -> list[str]:
+    """Fan out: scraper+generate in parallel, or just generate."""
     if state["needs_scrape"]:
         return ["generate", "scraper"]
     return ["generate"]
@@ -78,7 +79,7 @@ def build_graph():
     # Retry loop back to retriever
     builder.add_edge("rewriter", "retriever")
 
-    # After intent router: single generate or parallel fan-out
+    # After intent router: scrape+generate in parallel or generate alone
     builder.add_conditional_edges(
         "intent_router",
         route_after_intent,

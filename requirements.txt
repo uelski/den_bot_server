@@ -17,4 +17,5 @@ fastembed
 
 # Recommended for robustness
 tenacity                   # retry logic for LLM/scraping calls
-structlog  
+structlog
+

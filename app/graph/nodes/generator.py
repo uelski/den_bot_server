@@ -31,9 +31,11 @@ def _format_docs(docs) -> str:
 
 async def generator(state: AgentState) -> dict:
     """Stream an LLM response; select prompt based on query path."""
+    has_scrape = state.get("needs_scrape")
+
     if not state.get("requires_rag"):
         system_prompt = GENERATOR_SYSTEM_GENERAL
-    elif state.get("needs_scrape"):
+    elif has_scrape:
         system_prompt = GENERATOR_SYSTEM_HEDGE
     else:
         system_prompt = GENERATOR_SYSTEM_STANDARD
@@ -45,11 +47,9 @@ async def generator(state: AgentState) -> dict:
     )
     chain = prompt | llm
 
-    result = await chain.ainvoke(
-        {
-            "query": state["query"],
-            "documents": _format_docs(state["retrieved_docs"]),
-        }
-    )
+    result = await chain.ainvoke({
+        "query": state["query"],
+        "documents": _format_docs(state["retrieved_docs"]),
+    })
 
     return {"messages": [AIMessage(content=result.content)]}
