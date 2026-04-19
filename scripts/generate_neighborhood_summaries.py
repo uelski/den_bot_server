@@ -85,22 +85,79 @@ SECTION_FIELDS = {
     ],
 }
 
+# Human-readable labels fed to the LLM instead of raw column names.
+FIELD_LABELS = {
+    # Population
+    "Nmbr_Population": "Total population",
+    "Nmbr_PopulationDensity": "Population density",
+    "Nmbr_PopCivilianNonInstitution": "Civilian non-institutionalized population",
+    "Nmbr_PopulationUnder18": "Population under age 18",
+    "Pct_PopulationUnder18": "Percentage of population under age 18",
+    "Nmbr_PopulationOver70": "Population over age 70",
+    "Pct_PopulationOver70": "Percentage of population over age 70",
+    "Nmbr_PopulationWithDisability": "Population with a disability",
+    "Pct_PopulationWithDisability": "Percentage of population with a disability",
+    "Nmbr_PopUnder18InHouseholds": "Population under 18 living in households",
+    "Nmbr_Under18SingleParentFam": "Population under 18 in single-parent families",
+    "Pct_Under18InSingleParentFam": "Percentage of under 18 population in single-parent families",
+    # Housing
+    "Nmbr_Households": "Total households",
+    "Nmbr_OccupiedUnits": "Occupied housing units",
+    "Nmbr_OccupiedUnitsWithOwners": "Owner-occupied housing units",
+    "Pct_OccupiedUnitsWithOwners": "Percentage of occupied units that are owner-occupied",
+    "Nmbr_OccupiedUnitsWithRenters": "Renter-occupied housing units",
+    "Pct_OccupiedUnitsWithRenters": "Percentage of occupied units that are renter-occupied",
+    "Nmbr_HouseholdsCostBurdened": "Cost-burdened households (housing costs over 30% of income)",
+    "Pct_HouseholdsCostBurdened": "Percentage of households that are cost-burdened",
+    "Nmbr_HouseholdsNoVehAccess": "Households with no vehicle access",
+    "Pct_HouseholdsNoVehAccess": "Percentage of households with no vehicle access",
+    # Education
+    "Nmbr_Age25Plus": "Population age 25 and older",
+    "Pct_Age25Plus": "Percentage of population age 25 and older",
+    "Nmbr_Age25Plus_NoDiplomaOrGED": "Population 25+ with no high school diploma or GED",
+    "Pct_Age25Plus_NoDiplomaOrGED": "Percentage of 25+ population with no high school diploma or GED",
+    "Nmbr_Age25Plus_NoCollDegree": "Population 25+ with no college degree",
+    "Pct_Age25Plus_NoCollDegree": "Percentage of 25+ population with no college degree",
+    "Nmbr_Age25Plus_LessThanBA": "Population 25+ with less than a bachelor's degree",
+    "Pct_Age25Plus_LessThanBA": "Percentage of 25+ population with less than a bachelor's degree",
+    # Income & poverty
+    "Nmbr_PerCapitaIncome": "Per capita income (USD)",
+    "Nmbr_PopulationPovDetermined": "Population for whom poverty status was determined",
+    "Nmbr_PopulationInPoverty": "Population living below the poverty line",
+    "Pct_PopulationInPoverty": "Percentage of population living below the poverty line",
+    "Pct_PopOver16Unemployed": "Percentage of population over age 16 that is unemployed",
+    # Race & ethnicity
+    "Nmbr_PopNonHispanicWhite": "Non-Hispanic white population",
+    "Pct_PopNonHispanicWhite": "Percentage of population that is non-Hispanic white",
+    "Nmbr_PopulationMinority": "Minority (non-white or Hispanic) population",
+    "Pct_PopulationMinority": "Percentage of population that is a racial or ethnic minority",
+}
+
+
+def _format_value(name: str, value) -> str:
+    if name.startswith("Pct_"):
+        return f"{value}%"
+    if name == "Nmbr_PerCapitaIncome":
+        return f"${value}"
+    return str(value)
+
 
 class NeighborhoodSummary(BaseModel):
-    population: str = Field(description="2-4 sentences about population size, density, age distribution, disability, family/household composition. Must mention the neighborhood name. Use concrete numbers.")
-    housing: str = Field(description="2-4 sentences about households, owner/renter mix, cost burden, and no-vehicle households. Must mention the neighborhood name. Use concrete numbers.")
-    education: str = Field(description="2-4 sentences about educational attainment among adults 25 and older. Must mention the neighborhood name. Use concrete numbers.")
-    income_poverty: str = Field(description="2-4 sentences about per-capita income, poverty, and unemployment. Must mention the neighborhood name. Use concrete numbers.")
-    demographics: str = Field(description="2-4 sentences about race/ethnicity — non-Hispanic white share and minority share. Must mention the neighborhood name. Use concrete numbers.")
+    population: str = Field(description="Up to ~150 words about population: size, density, age distribution, disability, and family/household composition. Must mention the neighborhood name. Include every piece of related information — mention every metric provided. Use concrete numbers.")
+    housing: str = Field(description="Up to ~150 words about households, owner/renter mix, cost burden, and no-vehicle access. Must mention the neighborhood name. Include every piece of related information — mention every metric provided. Use concrete numbers.")
+    education: str = Field(description="Up to ~150 words about educational attainment among adults 25 and older. Must mention the neighborhood name. Include every piece of related information — mention every metric provided. Use concrete numbers.")
+    income_poverty: str = Field(description="Up to ~150 words about per-capita income, poverty, and unemployment. Must mention the neighborhood name. Include every piece of related information — mention every metric provided. Use concrete numbers.")
+    demographics: str = Field(description="Up to ~150 words about race/ethnicity — non-Hispanic white share and minority share. Must mention the neighborhood name. Include every piece of related information — mention every metric provided. Use concrete numbers.")
 
 
 SYSTEM_PROMPT = """You are a data analyst writing neighborhood-level demographic summaries for Denver, Colorado.
 
 You will receive ACS 2017-2021 metrics for a single Denver neighborhood, organized into five topical groups.
 Write one natural-language summary per topic. Each summary must:
-- Be 2-4 sentences
-- Include the neighborhood name prominently (every section)
-- Cite concrete numbers from the metrics (counts and percentages)
+- Be up to ~150 words (enough to cover every metric comfortably)
+- Include the neighborhood name prominently in every section
+- **Mention every metric provided for that section.** Do not skip any listed metric — if you cannot fit them all naturally, add one more sentence. Coverage is mandatory.
+- Cite concrete numbers from the metrics (both counts and percentages)
 - Be factual; do not speculate or infer causation
 - Round percentages to one decimal and counts to the nearest integer when helpful"""
 
@@ -111,7 +168,8 @@ def _format_metrics(properties: dict, field_names: list[str]) -> str:
         value = properties.get(name)
         if value is None:
             continue
-        lines.append(f"- {name}: {value}")
+        label = FIELD_LABELS.get(name, name)
+        lines.append(f"- {label}: {_format_value(name, value)}")
     return "\n".join(lines) if lines else "(no metrics available)"
 
 
@@ -135,6 +193,28 @@ def _build_human_prompt(properties: dict) -> str:
 def summarize_neighborhood(chain, properties: dict) -> NeighborhoodSummary:
     human = _build_human_prompt(properties)
     return chain.invoke({"input": human})
+
+
+def _augment_with_fact_list(sections: dict, properties: dict) -> dict:
+    """Append a complete fact list to each section so every metric is
+    guaranteed to appear in the embedded text, even if the LLM omitted some."""
+    augmented = {}
+    for section, fields in SECTION_FIELDS.items():
+        prose = sections.get(section, "")
+        fact_lines = []
+        for field in fields:
+            value = properties.get(field)
+            if value is None:
+                continue
+            label = FIELD_LABELS.get(field, field)
+            fact_lines.append(f"- {label}: {_format_value(field, value)}")
+        if fact_lines:
+            augmented[section] = (
+                f"{prose}\n\nKey metrics:\n" + "\n".join(fact_lines)
+            ).strip()
+        else:
+            augmented[section] = prose
+    return augmented
 
 
 def main() -> int:
@@ -179,11 +259,13 @@ def main() -> int:
             logger.warning("failed for %s — %s", nbhd_name, exc)
             continue
 
+        sections = _augment_with_fact_list(summary.model_dump(), raw_properties)
+
         out.append({
             "nbhd_name": nbhd_name,
             "nbhd_id": raw_properties.get("NBHD_ID"),
             "dist_num": raw_properties.get("DIST_NUM"),
-            "sections": summary.model_dump(),
+            "sections": sections,
             "raw_properties": raw_properties,
         })
 
