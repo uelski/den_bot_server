@@ -22,7 +22,15 @@ def _format_docs(docs) -> str:
     for d in docs:
         name = d.metadata.get("service_name", "Unknown")
         hub_url = d.metadata.get("hub_url")
-        header = f"[{name}]"
+        neighborhood_name = d.metadata.get("neighborhood_name")
+        topic = d.metadata.get("topic")
+        if neighborhood_name:
+            header = f"[{name} — {neighborhood_name}"
+            if topic:
+                header += f" ({topic.replace('_', ' ').title()})"
+            header += "]"
+        else:
+            header = f"[{name}]"
         if hub_url:
             header += f" (Hub page: {hub_url})"
         parts.append(f"{header}\n{d.page_content}")
