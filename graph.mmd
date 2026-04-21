@@ -1,0 +1,30 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	main_router(main_router)
+	retriever(retriever)
+	grader(grader)
+	intent_router(intent_router)
+	rewriter(rewriter)
+	generate(generate)
+	scraper(scraper)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> main_router;
+	grader -.-> generate;
+	grader -.-> intent_router;
+	grader -. &nbsp;rewrite&nbsp; .-> rewriter;
+	intent_router -.-> generate;
+	intent_router -.-> scraper;
+	main_router -.-> generate;
+	main_router -.-> retriever;
+	retriever --> grader;
+	rewriter --> retriever;
+	generate --> __end__;
+	scraper --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

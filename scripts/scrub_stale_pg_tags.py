@@ -23,13 +23,7 @@ import sys
 
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
-from qdrant_client.models import (
-    FieldCondition,
-    Filter,
-    IsEmptyCondition,
-    MatchValue,
-    PayloadField,
-)
+from qdrant_client.models import Filter, IsEmptyCondition, PayloadField
 
 load_dotenv()
 
