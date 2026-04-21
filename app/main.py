@@ -69,15 +69,37 @@ async def query_endpoint(body: QueryBody):
                 elif event_type == "on_chain_end" and node == "retriever":
                     output = event.get("data", {}).get("output", {})
                     docs = output.get("retrieved_docs", []) if output else []
-                    sources = [
-                        {
-                            "service_name": d.metadata.get("service_name"),
-                            "base_url": d.metadata.get("base_url"),
-                            **({"hub_url": d.metadata["hub_url"]} if d.metadata.get("hub_url") else {}),
+                    # Dedup sources by (service_name, base_url, hub_url, neighborhood_name).
+                    # For neighborhood_demographics docs, each distinct neighborhood
+                    # retrieved becomes its own source entry so the frontend can list them.
+                    seen_source_keys: set[tuple] = set()
+                    sources = []
+                    for d in docs:
+                        if not d.metadata.get("base_url"):
+                            continue
+                        service_name = d.metadata.get("service_name")
+                        base_url = d.metadata.get("base_url")
+                        hub_url = d.metadata.get("hub_url")
+                        is_neighborhood = (
+                            d.metadata.get("doc_type") == "neighborhood_demographics"
+                        )
+                        neighborhood_name = (
+                            d.metadata.get("neighborhood_name") if is_neighborhood else None
+                        )
+                        key = (service_name, base_url, hub_url, neighborhood_name)
+                        if key in seen_source_keys:
+                            continue
+                        seen_source_keys.add(key)
+                        entry = {
+                            "service_name": service_name,
+                            "base_url": base_url,
                         }
-                        for d in docs
-                        if d.metadata.get("base_url")
-                    ]
+                        if hub_url:
+                            entry["hub_url"] = hub_url
+                        if neighborhood_name:
+                            entry["neighborhood_name"] = neighborhood_name
+                            entry["doc_type"] = "neighborhood_demographics"
+                        sources.append(entry)
                     if sources:
                         payload = json.dumps({"sources": sources})
                         yield f"event: sources\ndata: {payload}\n\n"
