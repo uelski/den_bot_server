@@ -1,0 +1,22 @@
+{
+  "stats": {
+    "total": 1018,
+    "with_hub_url": 223,
+    "verified_live": 222,
+    "updated": 1,
+    "nulled_no_match": 0,
+    "ambiguous_skipped": 0,
+    "search_failed_skipped": 0
+  },
+  "changes": [
+    {
+      "service_name": "ODC_PARK_PARKLAND_A",
+      "base_url": "https://services1.arcgis.com/zdB7qR0BtYrg0Xpl/ArcGIS/rest/services/ODC_PARK_PARKLAND_A/FeatureServer",
+      "old_service_item_id": "45dea022c3fe46cf965fd967782ab701",
+      "old_hub_url": "https://opendata-geospatialdenver.hub.arcgis.com/datasets/45dea022c3fe46cf965fd967782ab701/about",
+      "new_service_item_id": "e752556524024fbfac700b35f33c0f2c",
+      "new_hub_url": "https://opendata-geospatialdenver.hub.arcgis.com/datasets/e752556524024fbfac700b35f33c0f2c/about",
+      "action": "updated"
+    }
+  ]
+}
