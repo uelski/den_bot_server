@@ -1,5 +1,8 @@
 # Denver Open Data RAG — Project Context
 
+## Session start
+Before beginning work, read `NEXT_STEPS.md` in the project root. It holds the current priority list (LangSmith, testing, memory, deployment, new data sources) with context on why each matters and what's already decided. When the user's request maps to one of those items, the file is the authoritative source for scope and sequencing.
+
 ## What This Is
 Agentic RAG system over Denver City Open Data Catalog (ArcGIS FeatureServer services).
 Users query in natural language; the system retrieves relevant GIS services and optionally
