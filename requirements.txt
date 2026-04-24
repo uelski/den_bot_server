@@ -19,3 +19,7 @@ fastembed
 tenacity                   # retry logic for LLM/scraping calls
 structlog
 
+# Testing
+pytest
+pytest-asyncio
+
