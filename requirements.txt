@@ -12,6 +12,7 @@ httpx                      # async HTTP for scraping agent
 python-dotenv              # .env loading
 pydantic>=2.0              # FastAPI v2 uses pydantic v2
 sse-starlette              # streaming responses from FastAPI
+shapely                    # polygon centroid computation (compute_neighborhood_centroids.py)
 dotenv
 fastembed
 
