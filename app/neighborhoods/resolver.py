@@ -67,6 +67,9 @@ ALIASES: dict[str, str] = {
     "caphill": "Capitol Hill",
     "lodo": "Union Station",
     "lower downtown": "Union Station",
+    "lohi": "Highland",
+    "uptown": "North Capitol Hill",
+    "golden triangle": "Civic Center"
 }
 
 
