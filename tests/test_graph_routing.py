@@ -31,6 +31,7 @@ class TestGraphStructure:
             "rewriter",
             "generate",
             "scraper",
+            "tool_agent",
             "__end__",
         }
         assert expected.issubset(node_names)
@@ -45,10 +46,17 @@ class TestGraphStructure:
 
 class TestRouteAfterRouter:
     def test_requires_rag_routes_to_retriever(self):
-        assert route_after_router({"requires_rag": True}) == "retriever"
+        assert route_after_router({"requires_rag": True, "needs_tool": False}) == "retriever"
 
     def test_general_query_routes_to_generate(self):
-        assert route_after_router({"requires_rag": False}) == "generate"
+        assert route_after_router({"requires_rag": False, "needs_tool": False}) == "generate"
+
+    def test_needs_tool_routes_to_tool_agent(self):
+        assert route_after_router({"requires_rag": False, "needs_tool": True}) == "tool_agent"
+
+    def test_tool_takes_precedence_over_rag(self):
+        """If both flags are set (shouldn't happen but defensively), tool wins."""
+        assert route_after_router({"requires_rag": True, "needs_tool": True}) == "tool_agent"
 
 
 class TestRouteAfterGrader:

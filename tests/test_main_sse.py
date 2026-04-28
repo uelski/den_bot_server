@@ -1,6 +1,6 @@
 """Unit tests for the SSE payload builders in app.main."""
 
-from app.main import build_map_viewer_links, build_sources_payload
+from app.main import _summarize_tool_output, build_map_viewer_links, build_sources_payload
 
 
 class TestBuildSourcesPayload:
@@ -101,3 +101,38 @@ class TestBuildMapViewerLinks:
         docs = [catalog_doc, neighborhood_doc_factory("Capitol Hill")]
         result = build_map_viewer_links(docs)
         assert len(result) == 2
+
+
+class TestSummarizeToolOutput:
+    def test_none_output(self):
+        assert _summarize_tool_output(None) == {"ok": False, "error": "no output"}
+
+    def test_dict_with_error_field(self):
+        result = _summarize_tool_output({"error": "no centroid"})
+        assert result == {"ok": False, "error": "no centroid"}
+
+    def test_weather_forecast_dict(self):
+        forecast = {
+            "neighborhood_name": "Five Points",
+            "lat": 39.76,
+            "lon": -104.97,
+            "periods": [{"name": "Tonight"}, {"name": "Tomorrow"}],
+        }
+        result = _summarize_tool_output(forecast)
+        assert result == {
+            "ok": True,
+            "neighborhood_name": "Five Points",
+            "lat": 39.76,
+            "lon": -104.97,
+            "period_count": 2,
+        }
+
+    def test_dict_without_known_keys(self):
+        assert _summarize_tool_output({"some": "payload"}) == {"ok": True}
+
+    def test_skips_none_values(self):
+        result = _summarize_tool_output({"neighborhood_name": None, "lat": None})
+        assert result == {"ok": True}
+
+    def test_non_dict_output(self):
+        assert _summarize_tool_output("just a string") == {"ok": True}

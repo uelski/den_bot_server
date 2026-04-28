@@ -25,6 +25,10 @@ class AgentState(TypedDict):
     # Retry tracking for query rewrite loop (max 2)
     retry_count: int
 
+    # Tool path (set by main_router; populated by tool_agent)
+    needs_tool: bool
+    tool_results: list[dict[str, Any]] | None  # list of {tool, args, result} per call
+
     # Scraper outputs — populated concurrently while generator streams
     scraped_layer_data: dict[str, Any] | None
     map_viewer_urls: list[str]  # hub page URLs + optional scraped viewer URL

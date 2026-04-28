@@ -9,6 +9,7 @@ from app.graph.nodes.retriever import retriever
 from app.graph.nodes.rewriter import rewriter
 from app.graph.nodes.router import main_router
 from app.graph.nodes.scraper import scraper
+from app.graph.nodes.tool_agent import tool_agent
 from app.graph.state import AgentState
 
 
@@ -18,6 +19,8 @@ from app.graph.state import AgentState
 
 
 def route_after_router(state: AgentState) -> str:
+    if state.get("needs_tool"):
+        return "tool_agent"
     if state["requires_rag"]:
         return "retriever"
     return "generate"
@@ -52,18 +55,21 @@ def build_graph():
     builder.add_node("rewriter", rewriter)
     builder.add_node("generate", generator)
     builder.add_node("scraper", scraper)
+    builder.add_node("tool_agent", tool_agent)
 
-    # Entry — router decides RAG vs direct LLM
+    # Entry — router decides between RAG, tools, and direct LLM
     builder.add_edge(START, "main_router")
     builder.add_conditional_edges(
         "main_router",
         route_after_router,
         {
             "retriever": "retriever",
+            "tool_agent": "tool_agent",
             "generate": "generate",
         },
     )
     builder.add_edge("retriever", "grader")
+    builder.add_edge("tool_agent", "generate")
 
     # After grader: retry loop or proceed to intent classification
     builder.add_conditional_edges(

@@ -24,3 +24,22 @@ GENERATOR_HUMAN = """Retrieved documents:
 {documents}
 
 User question: {query}"""
+
+
+GENERATOR_SYSTEM_TOOL = """You are a helpful assistant for the Denver open data catalog.
+
+The user asked a question that required a real-time tool lookup (such as the
+weather). The tool results are provided below as JSON. Summarize the key
+information for the user in plain English. Reference the neighborhood by name.
+
+If a tool returned an `error` field, acknowledge what could not be answered and
+suggest the user clarify or try again — do not invent data.
+
+Be concise. Quote concrete values from the tool output (temperatures, conditions,
+lat/lon if relevant) rather than generalizing."""
+
+
+GENERATOR_HUMAN_TOOL = """Tool results (JSON):
+{tool_results}
+
+User question: {query}"""
