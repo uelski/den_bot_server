@@ -50,10 +50,13 @@ def _patch_no_location():
 
 
 def _patch_periods(periods=None):
+    """Patch the cached fetch so callers in tests bypass the cache layer."""
     if periods is None:
         periods = [SAMPLE_PERIOD]
     return patch.object(
-        weather_module, "_fetch_nws_periods", new=AsyncMock(return_value=periods)
+        weather_module,
+        "_fetch_nws_periods_cached",
+        new=AsyncMock(return_value=periods),
     )
 
 
@@ -75,7 +78,7 @@ class TestGetWeatherForNeighborhoodHappyPath:
         many_periods = [SAMPLE_PERIOD] * 14
         with _patch_location(), patch.object(
             weather_module,
-            "_fetch_nws_periods",
+            "_fetch_nws_periods_cached",
             new=AsyncMock(return_value=many_periods[:5]),
         ) as mock_fetch:
             result = await get_weather_for_neighborhood("Capitol Hill", max_periods=5)
@@ -102,7 +105,7 @@ class TestGetWeatherForNeighborhoodFailures:
     async def test_nws_exception_returns_error_with_lat_lon_preserved(self):
         with _patch_location(39.74, -104.97), patch.object(
             weather_module,
-            "_fetch_nws_periods",
+            "_fetch_nws_periods_cached",
             new=AsyncMock(side_effect=httpx.HTTPStatusError(
                 "500", request=MagicMock(), response=MagicMock(),
             )),
@@ -203,11 +206,13 @@ class TestFetchNwsPeriodsTwoHop:
         mock_client.__aexit__.return_value = None
 
         with patch.object(httpx, "AsyncClient", return_value=mock_client):
-            result = await weather_module._fetch_nws_periods(39.74, -104.97)
+            # Pass a high-precision coord; the function should round it before sending.
+            result = await weather_module._fetch_nws_periods(39.75913297946512, -104.98336131638509)
 
         assert mock_client.get.call_count == 2
         first_call_url = mock_client.get.call_args_list[0].args[0]
-        assert "/points/39.74,-104.97" in first_call_url
+        # Verify rounding to 4 decimals — avoids the 301 redirect from NWS.
+        assert "/points/39.7591,-104.9834" in first_call_url
         second_call_url = mock_client.get.call_args_list[1].args[0]
         assert "gridpoints" in second_call_url
 
@@ -267,6 +272,48 @@ class TestFetchNwsPeriodsTwoHop:
         # Only the well-formed period survives.
         assert len(result) == 1
         assert result[0].name == "Good period"
+
+
+class TestNwsCaching:
+    @pytest.mark.asyncio
+    async def test_repeat_calls_with_same_lat_lon_hit_cache(self):
+        """Second call with the same (lat, lon, max_periods) should not invoke
+        the underlying fetch function."""
+        with patch.object(
+            weather_module,
+            "_fetch_nws_periods",
+            new=AsyncMock(return_value=[SAMPLE_PERIOD]),
+        ) as mock_fetch:
+            await weather_module._fetch_nws_periods_cached(39.74, -104.97)
+            await weather_module._fetch_nws_periods_cached(39.74, -104.97)
+            await weather_module._fetch_nws_periods_cached(39.74, -104.97)
+
+        assert mock_fetch.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_different_coordinates_dont_share_cache(self):
+        with patch.object(
+            weather_module,
+            "_fetch_nws_periods",
+            new=AsyncMock(return_value=[SAMPLE_PERIOD]),
+        ) as mock_fetch:
+            await weather_module._fetch_nws_periods_cached(39.74, -104.97)
+            await weather_module._fetch_nws_periods_cached(39.78, -105.01)
+
+        assert mock_fetch.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_expired_cache_entry_refetches(self, monkeypatch):
+        monkeypatch.setattr(weather_module, "NWS_CACHE_TTL_SECONDS", 0)
+        with patch.object(
+            weather_module,
+            "_fetch_nws_periods",
+            new=AsyncMock(return_value=[SAMPLE_PERIOD]),
+        ) as mock_fetch:
+            await weather_module._fetch_nws_periods_cached(39.74, -104.97)
+            await weather_module._fetch_nws_periods_cached(39.74, -104.97)
+
+        assert mock_fetch.call_count == 2
 
 
 class TestGetNeighborhoodLocation:

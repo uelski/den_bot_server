@@ -62,6 +62,39 @@ def build_sources_payload(docs) -> list[dict]:
     return sources
 
 
+def _summarize_tool_output(output) -> dict:
+    """Build a small dict describing a tool's outcome for the SSE `tool_result`
+    event. Keeps payloads small (the full result lives in state.tool_results
+    and ends up in the LLM's context — the frontend just needs a status hint)."""
+    if output is None:
+        return {"ok": False, "error": "no output"}
+
+    # LangChain wraps tool returns in a ToolMessage on .output sometimes; unwrap.
+    if hasattr(output, "content"):
+        try:
+            import json as _json
+            content = output.content
+            if isinstance(content, str):
+                content = _json.loads(content) if content.strip().startswith("{") else content
+            output = content
+        except (ValueError, TypeError):
+            pass
+
+    if isinstance(output, dict):
+        if output.get("error"):
+            return {"ok": False, "error": output["error"]}
+        # Best-effort: pull a few useful summary fields if present.
+        summary: dict = {"ok": True}
+        for key in ("neighborhood_name", "lat", "lon"):
+            if key in output and output[key] is not None:
+                summary[key] = output[key]
+        if "periods" in output and isinstance(output["periods"], list):
+            summary["period_count"] = len(output["periods"])
+        return summary
+
+    return {"ok": True}
+
+
 def build_map_viewer_links(docs) -> list[dict]:
     """Build the deduplicated `map_viewer` SSE link list from retrieved docs.
 
@@ -99,6 +132,8 @@ async def query_endpoint(body: QueryBody):
         "retrieved_docs": [],
         "docs_relevant": None,
         "needs_scrape": False,
+        "needs_tool": False,
+        "tool_results": None,
         "retry_count": 0,
         "scraped_layer_data": None,
         "map_viewer_urls": [],
@@ -138,6 +173,29 @@ async def query_endpoint(body: QueryBody):
                     hub_links = build_map_viewer_links(docs)
                     if hub_links:
                         yield f"event: map_viewer\ndata: {json.dumps({'urls': hub_links})}\n\n"
+
+                # Tool starting inside tool_agent — let the frontend show "looking up..." UI
+                elif event_type == "on_tool_start" and node == "tool_agent":
+                    tool_name = event.get("name", "")
+                    tool_input = event.get("data", {}).get("input") or {}
+                    payload = json.dumps({
+                        "tool": tool_name,
+                        "status": "running",
+                        "args": tool_input,
+                    })
+                    yield f"event: tool_call\ndata: {payload}\n\n"
+
+                # Tool finished — frontend can transition to "got data, generating..."
+                elif event_type == "on_tool_end" and node == "tool_agent":
+                    tool_name = event.get("name", "")
+                    output = event.get("data", {}).get("output")
+                    summary = _summarize_tool_output(output)
+                    payload = json.dumps({
+                        "tool": tool_name,
+                        "status": "complete",
+                        **summary,
+                    })
+                    yield f"event: tool_result\ndata: {payload}\n\n"
 
                 # Scraper finished — emit scraped map_viewer_url if present
                 elif event_type == "on_chain_end" and node == "scraper":

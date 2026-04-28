@@ -1,5 +1,6 @@
 """generator node — async streaming LLM response."""
 
+import json
 import os
 
 from langchain_core.messages import AIMessage
@@ -9,9 +10,11 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from app.graph.state import AgentState
 from app.prompts.generator_prompt import (
     GENERATOR_HUMAN,
+    GENERATOR_HUMAN_TOOL,
     GENERATOR_SYSTEM_GENERAL,
     GENERATOR_SYSTEM_HEDGE,
     GENERATOR_SYSTEM_STANDARD,
+    GENERATOR_SYSTEM_TOOL,
 )
 
 MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
@@ -40,6 +43,20 @@ def _format_docs(docs) -> str:
 async def generator(state: AgentState) -> dict:
     """Stream an LLM response; select prompt based on query path."""
     has_scrape = state.get("needs_scrape")
+    tool_results = state.get("tool_results")
+
+    llm = ChatGoogleGenerativeAI(model=MODEL, temperature=0.2, streaming=True)
+
+    if tool_results:
+        # Tool path — summarize the tool output(s)
+        prompt = ChatPromptTemplate.from_messages(
+            [("system", GENERATOR_SYSTEM_TOOL), ("human", GENERATOR_HUMAN_TOOL)]
+        )
+        result = await (prompt | llm).ainvoke({
+            "query": state["query"],
+            "tool_results": json.dumps(tool_results, indent=2, default=str),
+        })
+        return {"messages": [AIMessage(content=result.content)]}
 
     if not state.get("requires_rag"):
         system_prompt = GENERATOR_SYSTEM_GENERAL
@@ -47,8 +64,6 @@ async def generator(state: AgentState) -> dict:
         system_prompt = GENERATOR_SYSTEM_HEDGE
     else:
         system_prompt = GENERATOR_SYSTEM_STANDARD
-
-    llm = ChatGoogleGenerativeAI(model=MODEL, temperature=0.2, streaming=True)
 
     prompt = ChatPromptTemplate.from_messages(
         [("system", system_prompt), ("human", GENERATOR_HUMAN)]
