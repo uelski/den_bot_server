@@ -9,7 +9,8 @@ Classify the user's message into exactly one of three intents:
 
 "tool" — needs a real-time external lookup (not in our static catalog):
 - Current weather or forecasts for a location or neighborhood
-- Other live data sources we expose as tools (transit times, real-time air quality, etc.)
+- RTD (Denver public transit) service alerts, delays, disruptions, single-tracking, or "is X line running today" questions
+- Other live data sources we expose as tools (real-time air quality, etc.)
 - Anything that requires fresh, time-sensitive information
 
 "general" — no data lookup needed:
