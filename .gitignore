@@ -17,3 +17,7 @@ __pycache__/
 *.egg-info/
 *.pyc
 enriched_denver_catalog_v2.json
+
+# RTD GTFS data — large, replaceable from the public download
+data/rtd_gtfs/
+data/google_transit.zip

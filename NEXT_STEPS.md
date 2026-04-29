@@ -17,6 +17,14 @@ Tracing is live. `.env` carries `LANGCHAIN_API_KEY`, `LANGCHAIN_TRACING_V2=true`
 
 **Eval harness** is the natural follow-up — once we have ~20 representative queries with expected behavior, LangSmith datasets can regression-test prompt/model changes. Not blocking anything; pick up when prompt-tuning starts to feel risky.
 
+### NWS weather tool — done (first agent tool, on `feature/geodata`)
+- 3-way `main_router` (general / data_search / tool); orchestrator routes `needs_tool` to a new `app/graph/nodes/tool_agent.py` ReAct loop.
+- `app/tools/registry.py` is the single registry of `@tool`-decorated functions bound to Gemini. First entry: `get_neighborhood_weather`, wrapping `app/tools/weather.py` (resolver → Qdrant lat/lon → NWS API).
+- Generator branches on `state.tool_results` to use a tool-aware prompt variant; streaming SSE token events flow as usual.
+- New SSE events: `tool_call` and `tool_result` (forwarded from LangChain's `on_tool_start` / `on_tool_end`, filtered to `langgraph_node == "tool_agent"`).
+- NWS reliability: 30-min TTL cache and 4-decimal coordinate rounding to avoid 301 redirects.
+- Adding the next tool is now: write the function, decorate with `@tool`, append to `AGENT_TOOLS`. No graph or router changes required.
+
 ---
 
 ## 1. Memory (multi-turn conversations)
@@ -82,4 +90,3 @@ The catalog today is Denver GIS services from ArcGIS FeatureServer plus per-neig
 
 - **Hub URL audit** has its own workflow in `scripts/audit_hub_urls.py` + `scripts/apply_hub_url_updates.py` — run periodically (quarterly?) or when broken links are reported. See `hub_url_audit_system.md` in memory.
 - **Frontend adaptation** to the enriched `sources` SSE payload (rendering neighborhood-demographics entries with `neighborhood_name`) and the new `tool_call` / `tool_result` events — lives on the frontend repo.
-- **NWS weather tool** is shipped on `feature/geodata` (commit `44fd48b`): tool-calling branch with a 3-way main_router, `app/graph/nodes/tool_agent.py` ReAct loop, weather as the first registered tool, SSE `tool_call` / `tool_result` events. Adding more tools = function + entry in `AGENT_TOOLS`.

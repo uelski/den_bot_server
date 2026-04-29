@@ -103,36 +103,155 @@ class TestBuildMapViewerLinks:
         assert len(result) == 2
 
 
-class TestSummarizeToolOutput:
-    def test_none_output(self):
-        assert _summarize_tool_output(None) == {"ok": False, "error": "no output"}
+WEATHER_TOOL = "get_neighborhood_weather"
+ALERTS_TOOL = "get_rtd_service_alerts"
 
-    def test_dict_with_error_field(self):
-        result = _summarize_tool_output({"error": "no centroid"})
-        assert result == {"ok": False, "error": "no centroid"}
+WEATHER_KEYS = {"ok", "error", "neighborhood_name", "lat", "lon", "period_count"}
+ALERTS_KEYS = {"ok", "error", "total_active", "filtered_count", "alerts_url", "sample"}
 
-    def test_weather_forecast_dict(self):
-        forecast = {
+
+class TestSummarizeToolOutputDeterministicShape:
+    """The contract: payloads for a known tool always have the full keyset for
+    that tool, with `null` for missing values. Frontend can rely on this
+    discriminated-union shape without existence checks."""
+
+    # --- Weather --------------------------------------------------------------
+
+    def test_weather_success_full_keyset_populated(self):
+        output = {
             "neighborhood_name": "Five Points",
             "lat": 39.76,
             "lon": -104.97,
             "periods": [{"name": "Tonight"}, {"name": "Tomorrow"}],
         }
-        result = _summarize_tool_output(forecast)
-        assert result == {
-            "ok": True,
-            "neighborhood_name": "Five Points",
-            "lat": 39.76,
-            "lon": -104.97,
-            "period_count": 2,
+        result = _summarize_tool_output(WEATHER_TOOL, output)
+        assert set(result.keys()) == WEATHER_KEYS
+        assert result["ok"] is True
+        assert result["error"] is None
+        assert result["neighborhood_name"] == "Five Points"
+        assert result["lat"] == 39.76
+        assert result["lon"] == -104.97
+        assert result["period_count"] == 2
+
+    def test_weather_error_keeps_full_keyset_with_nulls(self):
+        result = _summarize_tool_output(WEATHER_TOOL, {"error": "no centroid"})
+        assert set(result.keys()) == WEATHER_KEYS
+        assert result["ok"] is False
+        assert result["error"] == "no centroid"
+        for key in ("neighborhood_name", "lat", "lon", "period_count"):
+            assert result[key] is None
+
+    def test_weather_with_some_fields_missing_gets_nulls_for_those(self):
+        output = {"neighborhood_name": "Capitol Hill"}  # lat/lon/periods missing
+        result = _summarize_tool_output(WEATHER_TOOL, output)
+        assert set(result.keys()) == WEATHER_KEYS
+        assert result["neighborhood_name"] == "Capitol Hill"
+        assert result["lat"] is None
+        assert result["lon"] is None
+        assert result["period_count"] is None
+
+    def test_weather_none_output_full_keyset_with_error(self):
+        result = _summarize_tool_output(WEATHER_TOOL, None)
+        assert set(result.keys()) == WEATHER_KEYS
+        assert result["ok"] is False
+        assert result["error"] == "no output"
+        assert result["neighborhood_name"] is None
+
+    # --- Alerts ---------------------------------------------------------------
+
+    def test_alerts_success_full_keyset_populated(self):
+        output = {
+            "alerts": [],
+            "total_active": 0,
+            "filtered_count": 0,
+            "alerts_url": "https://app.rtd-denver.com/alerts",
         }
+        result = _summarize_tool_output(ALERTS_TOOL, output)
+        assert set(result.keys()) == ALERTS_KEYS
+        assert result["ok"] is True
+        assert result["total_active"] == 0
+        assert result["alerts_url"] == "https://app.rtd-denver.com/alerts"
+        assert result["sample"] == []
 
-    def test_dict_without_known_keys(self):
-        assert _summarize_tool_output({"some": "payload"}) == {"ok": True}
+    def test_alerts_error_keeps_full_keyset_with_nulls(self):
+        result = _summarize_tool_output(
+            ALERTS_TOOL, {"error": "RTD endpoint unreachable"}
+        )
+        assert set(result.keys()) == ALERTS_KEYS
+        assert result["ok"] is False
+        assert result["error"] == "RTD endpoint unreachable"
+        for key in ("total_active", "filtered_count", "alerts_url", "sample"):
+            assert result[key] is None
 
-    def test_skips_none_values(self):
-        result = _summarize_tool_output({"neighborhood_name": None, "lat": None})
-        assert result == {"ok": True}
+    def test_alerts_sample_truncated_to_two(self):
+        output = {
+            "alerts": [
+                {"header": f"alert {i}", "effect": "DETOUR", "affected_routes": [f"R{i}"], "affected_stops": []}
+                for i in range(5)
+            ],
+            "total_active": 47,
+            "filtered_count": 5,
+            "alerts_url": "https://app.rtd-denver.com/alerts",
+        }
+        result = _summarize_tool_output(ALERTS_TOOL, output)
+        assert result["total_active"] == 47
+        assert result["filtered_count"] == 5
+        assert len(result["sample"]) == 2
+        assert result["sample"][0]["header"] == "alert 0"
+        assert result["sample"][1]["header"] == "alert 1"
 
-    def test_non_dict_output(self):
-        assert _summarize_tool_output("just a string") == {"ok": True}
+    def test_alerts_sample_carries_routes_and_effect(self):
+        output = {
+            "alerts": [
+                {
+                    "header": "W Line single tracking",
+                    "effect": "SIGNIFICANT_DELAYS",
+                    "affected_routes": ["W"],
+                    "affected_stops": ["S1"],
+                }
+            ],
+            "total_active": 1,
+            "filtered_count": 1,
+            "alerts_url": "https://app.rtd-denver.com/alerts",
+        }
+        result = _summarize_tool_output(ALERTS_TOOL, output)
+        sample = result["sample"][0]
+        assert sample["header"] == "W Line single tracking"
+        assert sample["effect"] == "SIGNIFICANT_DELAYS"
+        assert sample["affected_routes"] == ["W"]
+        assert sample["affected_stops"] == ["S1"]
+
+    def test_alerts_long_header_truncated(self):
+        output = {
+            "alerts": [{"header": "x" * 500, "effect": "OTHER_EFFECT",
+                        "affected_routes": [], "affected_stops": []}],
+            "total_active": 1,
+            "filtered_count": 1,
+            "alerts_url": "https://app.rtd-denver.com/alerts",
+        }
+        result = _summarize_tool_output(ALERTS_TOOL, output)
+        assert len(result["sample"][0]["header"]) == 160
+
+    # --- Unknown tool fallback -----------------------------------------------
+
+    def test_unknown_tool_returns_minimal_shape(self):
+        result = _summarize_tool_output("not_a_real_tool", {"some": "data"})
+        assert set(result.keys()) == {"ok", "error"}
+        assert result["ok"] is True
+        assert result["error"] is None
+
+    def test_unknown_tool_with_error_returns_minimal_error_shape(self):
+        result = _summarize_tool_output("not_a_real_tool", {"error": "fail"})
+        assert result == {"ok": False, "error": "fail"}
+
+    def test_unknown_tool_none_output(self):
+        result = _summarize_tool_output("not_a_real_tool", None)
+        assert result == {"ok": False, "error": "no output"}
+
+    # --- Non-dict input branch -----------------------------------------------
+
+    def test_non_dict_output_for_known_tool_keeps_keyset_with_nulls(self):
+        result = _summarize_tool_output(WEATHER_TOOL, "just a string")
+        assert set(result.keys()) == WEATHER_KEYS
+        assert result["ok"] is True
+        assert result["neighborhood_name"] is None
