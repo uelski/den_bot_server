@@ -1,6 +1,11 @@
 """Unit tests for the SSE payload builders in app.main."""
 
-from app.main import _summarize_tool_output, build_map_viewer_links, build_sources_payload
+from app.main import (
+    _summarize_tool_output,
+    build_map_viewer_links,
+    build_sources_payload,
+    build_tool_map_viewer_links,
+)
 
 
 class TestBuildSourcesPayload:
@@ -255,3 +260,141 @@ class TestSummarizeToolOutputDeterministicShape:
         assert set(result.keys()) == WEATHER_KEYS
         assert result["ok"] is True
         assert result["neighborhood_name"] is None
+
+
+ARRIVALS_TOOL = "get_rtd_next_arrivals"
+VEHICLES_TOOL = "get_rtd_vehicle_positions"
+ARRIVALS_KEYS = {
+    "ok", "error", "stop_count", "arrival_count", "resolution_method",
+    "has_realtime", "sample",
+}
+VEHICLES_KEYS = {
+    "ok", "error", "route_short_name", "route_long_name", "vehicle_count",
+    "has_realtime",
+}
+
+
+class TestSummarizeArrivalsAndVehicles:
+    def test_arrivals_full_keyset_populated(self):
+        output = {
+            "matched_stops": [{"stop_id": "S1"}, {"stop_id": "S2"}],
+            "arrivals": [
+                {"route_short_name": "W", "headsign": "Union Station",
+                 "minutes_until": 3, "stop_name": "38th & Blake"},
+                {"route_short_name": "W", "headsign": "Federal Center",
+                 "minutes_until": 7, "stop_name": "38th & Blake"},
+            ],
+            "resolution_method": "stop_name",
+            "has_realtime": True,
+        }
+        result = _summarize_tool_output(ARRIVALS_TOOL, output)
+        assert set(result.keys()) == ARRIVALS_KEYS
+        assert result["ok"] is True
+        assert result["stop_count"] == 2
+        assert result["arrival_count"] == 2
+        assert result["resolution_method"] == "stop_name"
+        assert result["has_realtime"] is True
+        assert len(result["sample"]) == 2
+
+    def test_arrivals_error_keyset_with_nulls(self):
+        result = _summarize_tool_output(
+            ARRIVALS_TOOL, {"error": "Could not resolve a stop"}
+        )
+        assert set(result.keys()) == ARRIVALS_KEYS
+        assert result["ok"] is False
+        assert result["error"] == "Could not resolve a stop"
+
+    def test_vehicles_full_keyset_populated(self):
+        output = {
+            "matched_route": {
+                "route_id": "103W", "short_name": "W", "long_name": "W Line",
+            },
+            "vehicles": [{"vehicle_id": "v1"}, {"vehicle_id": "v2"}],
+            "has_realtime": True,
+        }
+        result = _summarize_tool_output(VEHICLES_TOOL, output)
+        assert set(result.keys()) == VEHICLES_KEYS
+        assert result["ok"] is True
+        assert result["route_short_name"] == "W"
+        assert result["route_long_name"] == "W Line"
+        assert result["vehicle_count"] == 2
+
+    def test_vehicles_error_keyset_with_nulls(self):
+        result = _summarize_tool_output(
+            VEHICLES_TOOL, {"error": "Could not resolve a route"}
+        )
+        assert set(result.keys()) == VEHICLES_KEYS
+        assert result["ok"] is False
+        assert result["route_short_name"] is None
+
+
+class TestBuildToolMapViewerLinks:
+    def test_unknown_tool_returns_empty(self):
+        assert build_tool_map_viewer_links("not_a_real_tool", {"x": 1}) == []
+
+    def test_arrivals_emits_stop_urls_with_combined_label(self):
+        output = {
+            "matched_stops": [
+                {
+                    "stop_id": "S1", "stop_name": "38th & Blake",
+                    "stop_desc": "Vehicles Travelling West",
+                    "nextride_url": "https://app.rtd-denver.com/nextride/stop/S1",
+                },
+                {
+                    "stop_id": "S2", "stop_name": "38th & Blake",
+                    "stop_desc": "Vehicles Travelling East",
+                    "nextride_url": "https://app.rtd-denver.com/nextride/stop/S2",
+                },
+            ],
+        }
+        links = build_tool_map_viewer_links(ARRIVALS_TOOL, output)
+        assert len(links) == 2
+        assert links[0]["label"] == "38th & Blake — Vehicles Travelling West"
+        assert links[0]["url"].endswith("/stop/S1")
+        assert links[1]["label"] == "38th & Blake — Vehicles Travelling East"
+
+    def test_arrivals_dedupes_by_url(self):
+        same = {
+            "stop_id": "S1", "stop_name": "X", "stop_desc": "",
+            "nextride_url": "https://app.rtd-denver.com/nextride/stop/S1",
+        }
+        output = {"matched_stops": [same, same]}
+        assert len(build_tool_map_viewer_links(ARRIVALS_TOOL, output)) == 1
+
+    def test_arrivals_caps_at_four(self):
+        stops = [
+            {
+                "stop_id": f"S{i}", "stop_name": f"Stop {i}", "stop_desc": "",
+                "nextride_url": f"https://app.rtd-denver.com/nextride/stop/S{i}",
+            }
+            for i in range(7)
+        ]
+        links = build_tool_map_viewer_links(ARRIVALS_TOOL, {"matched_stops": stops})
+        assert len(links) == 4
+
+    def test_arrivals_skips_when_error(self):
+        output = {
+            "matched_stops": [
+                {
+                    "stop_id": "S1", "stop_name": "X", "stop_desc": "",
+                    "nextride_url": "https://app.rtd-denver.com/nextride/stop/S1",
+                },
+            ],
+            "error": "fetch failed",
+        }
+        assert build_tool_map_viewer_links(ARRIVALS_TOOL, output) == []
+
+    def test_vehicles_emits_route_url_with_label(self):
+        output = {
+            "matched_route": {
+                "short_name": "W", "long_name": "W Line",
+                "nextride_url": "https://app.rtd-denver.com/nextride/route/W",
+            },
+        }
+        links = build_tool_map_viewer_links(VEHICLES_TOOL, output)
+        assert links == [
+            {"url": "https://app.rtd-denver.com/nextride/route/W", "label": "W — W Line"}
+        ]
+
+    def test_vehicles_no_match_returns_empty(self):
+        assert build_tool_map_viewer_links(VEHICLES_TOOL, {"matched_route": None}) == []

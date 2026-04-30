@@ -94,7 +94,7 @@ def routes_df():
                 "route_color": "0066CC",
             },
             {
-                "route_id": "R2",
+                "route_id": "103W",
                 "agency_id": "RTD",
                 "route_short_name": "W",
                 "route_long_name": "W Line",
@@ -113,7 +113,7 @@ def trips_df():
         [
             {"trip_id": "T1", "route_id": "R1"},
             {"trip_id": "T2", "route_id": "R1"},
-            {"trip_id": "T3", "route_id": "R2"},
+            {"trip_id": "T3", "route_id": "103W"},
         ]
     )
 
@@ -138,8 +138,8 @@ class TestStopRouteIndex:
     def test_join_and_dedupe(self, gtfs_module, stop_times_df, trips_df):
         index = gtfs_module.build_stop_route_index(stop_times_df, trips_df)
         assert index["S1"] == ["R1"]           # T1 + T2 both -> R1, dedupes
-        assert sorted(index["S2"]) == ["R1", "R2"]
-        assert index["S3"] == ["R2"]
+        assert sorted(index["S2"]) == ["103W", "R1"]
+        assert index["S3"] == ["103W"]
 
     def test_route_lists_are_sorted(self, gtfs_module, stop_times_df, trips_df):
         """Deterministic output makes downstream embedding text reproducible."""
@@ -249,7 +249,7 @@ class TestBuildRouteDocuments:
     ):
         index = gtfs_module.build_stop_route_index(stop_times_df, trips_df)
         docs = gtfs_module.build_route_documents(routes_df, index, "RTD")
-        r2 = next(d for d in docs if d.metadata["route_id"] == "R2")
+        r2 = next(d for d in docs if d.metadata["route_id"] == "103W")
         assert r2.metadata["doc_type"] == "rtd_route"
         assert r2.metadata["route_short_name"] == "W"
         assert r2.metadata["route_type"] == 0
@@ -264,24 +264,33 @@ class TestBuildRouteDocuments:
         docs = gtfs_module.build_route_documents(routes_df, index, "RTD")
         labels = {d.metadata["route_id"]: d.metadata["route_type_label"] for d in docs}
         assert labels["R1"] == "Bus"        # type 3
-        assert labels["R2"] == "Light Rail" # type 0
+        assert labels["103W"] == "Light Rail" # type 0
 
-    def test_url_templates_use_route_id(
+    def test_url_templates_use_nextride_slug(
         self, gtfs_module, routes_df, stop_times_df, trips_df
     ):
+        # Slug rule (see _rtd_static.nextride_route_slug):
+        #   - rail-shape ids ("103W") use route_short_name -> /route/W
+        #   - everything else uses route_id -> /route/R1
         index = gtfs_module.build_stop_route_index(stop_times_df, trips_df)
         docs = gtfs_module.build_route_documents(routes_df, index, "RTD")
         r1 = next(d for d in docs if d.metadata["route_id"] == "R1")
+        # R1 doesn't match ^\d+[A-Z]+$, so route_id wins as the slug.
         expected = "https://app.rtd-denver.com/nextride/route/R1"
         assert r1.metadata["base_url"] == expected
         assert r1.metadata["hub_url"] == expected
+        r2 = next(d for d in docs if d.metadata["route_id"] == "103W")
+        # 103W matches rail regex, so short_name wins.
+        expected_r2 = "https://app.rtd-denver.com/nextride/route/W"
+        assert r2.metadata["base_url"] == expected_r2
+        assert r2.metadata["hub_url"] == expected_r2
 
     def test_page_content_uses_long_name_and_label(
         self, gtfs_module, routes_df, stop_times_df, trips_df
     ):
         index = gtfs_module.build_stop_route_index(stop_times_df, trips_df)
         docs = gtfs_module.build_route_documents(routes_df, index, "RTD")
-        r2 = next(d for d in docs if d.metadata["route_id"] == "R2")
+        r2 = next(d for d in docs if d.metadata["route_id"] == "103W")
         text = r2.page_content
         assert "W Line" in text
         assert "Light Rail" in text
