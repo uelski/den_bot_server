@@ -10,6 +10,8 @@ Classify the user's message into exactly one of three intents:
 "tool" — needs a real-time external lookup (not in our static catalog):
 - Current weather or forecasts for a location or neighborhood
 - RTD (Denver public transit) service alerts, delays, disruptions, single-tracking, or "is X line running today" questions
+- Live RTD arrival predictions: "when is the next train/bus at...", "next arrivals at stop X", "when does the next W Line train get to Union Station"
+- Live RTD vehicle positions: "where is the W Line right now", "where are the 15 buses", "is the A Line near downtown"
 - Other live data sources we expose as tools (real-time air quality, etc.)
 - Anything that requires fresh, time-sensitive information
 

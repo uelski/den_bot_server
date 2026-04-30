@@ -32,6 +32,11 @@ from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
 from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchAny
 
+# Make the project root importable so this standalone script can pull from app.tools.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.tools._rtd_static import nextride_route_slug  # noqa: E402
+
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -47,7 +52,10 @@ COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "denver_gis_catalog")
 
 SERVICE_NAME = "RTD Transit (GTFS)"
 STOP_URL_TEMPLATE = "https://app.rtd-denver.com/nextride/stop/{stop_id}"
-ROUTE_URL_TEMPLATE = "https://app.rtd-denver.com/nextride/route/{route_id}"
+# Slug derivation lives in app.tools._rtd_static.nextride_route_slug — the
+# rule is: rail uses route_short_name (W, D, ...), everything else uses
+# route_id (FREE, BOND, FMR, FF1, 100, ...).
+ROUTE_URL_TEMPLATE = "https://app.rtd-denver.com/nextride/route/{route_slug}"
 
 STOP_DOC_TYPE = "rtd_stop"
 ROUTE_DOC_TYPE = "rtd_route"
@@ -237,7 +245,8 @@ def build_route_documents(
             f"Denver metro area."
         ).replace("  ", " ")
 
-        route_url = ROUTE_URL_TEMPLATE.format(route_id=route_id)
+        route_slug = nextride_route_slug(route_id, route_short_name)
+        route_url = ROUTE_URL_TEMPLATE.format(route_slug=route_slug)
         full_metadata = {
             "route_id": route_id,
             "route_short_name": route_short_name,

@@ -10,6 +10,17 @@ LLM reads docstrings as the tool's spec). To add a tool:
 from langchain_core.tools import tool
 
 from app.tools.rtd_alerts import ServiceAlertsResult, fetch_active_alerts
+from app.tools.rtd_arrivals import (
+    ArrivalsResult,
+    DEFAULT_MAX_RESULTS,
+    DEFAULT_WINDOW_MINUTES,
+    get_arrivals_for_query,
+)
+from app.tools.rtd_vehicles import (
+    DEFAULT_MAX_VEHICLES,
+    VehiclePositionsResult,
+    get_vehicle_positions_for_query,
+)
 from app.tools.weather import (
     DEFAULT_PERIODS,
     WeatherForecast,
@@ -72,5 +83,84 @@ async def get_rtd_service_alerts(query: str = "") -> dict:
     return result.model_dump(mode="json")
 
 
+@tool
+async def get_rtd_next_arrivals(query: str, max_results: int = DEFAULT_MAX_RESULTS) -> dict:
+    """Look up live RTD train/bus arrival predictions at a Denver transit stop.
+
+    Use this for time-sensitive "when's the next..." or "next arrivals at..."
+    questions about a specific stop, intersection, or place. Examples:
+      - "when's the next train at Union Station?"
+      - "next bus at 38th & Blake"
+      - "what trains are coming at stop 26134?"
+      - "next arrivals near Capitol Hill"
+
+    The tool resolves a stop in three ways: (1) a numeric stop code in the
+    query, (2) a stop name like "Union Station" (returns both directions), or
+    (3) a Denver neighborhood name (uses the neighborhood centroid + nearest
+    stop). Predictions come from RTD's GTFS-realtime TripUpdate feed; the
+    default window is the next 30 minutes.
+
+    Args:
+        query: The user's full natural-language query.
+        max_results: Cap on returned arrivals (default 5).
+
+    Returns:
+        A dict with:
+          - `matched_stops`: list of resolved stops, each with stop_id,
+            stop_name, stop_desc, lat/lon, and a NextRide deep-link URL.
+          - `arrivals`: list of predicted arrivals (route_short_name, headsign,
+            predicted_time, minutes_until, delay_seconds, NextRide URLs, ...).
+          - `has_realtime`: false on fetch failure or when no predictions found.
+          - `resolution_method`: "stop_code" / "stop_name" /
+            "neighborhood_centroid" / "none".
+          - `fetched_at`: ISO timestamp.
+          - `error`: set on fetch failure or when no stop could be resolved.
+    """
+    result: ArrivalsResult = await get_arrivals_for_query(
+        query=query, max_results=max_results, window_minutes=DEFAULT_WINDOW_MINUTES
+    )
+    return result.model_dump(mode="json")
+
+
+@tool
+async def get_rtd_vehicle_positions(query: str, max_results: int = DEFAULT_MAX_VEHICLES) -> dict:
+    """Look up the current location of RTD vehicles operating on a route.
+
+    Use this for "where is..." or "where are..." questions about a specific
+    train or bus line. Examples:
+      - "where is the W Line right now?"
+      - "where are the 15 buses?"
+      - "is the A Line near Union Station?"
+      - "where's the FreeRide?"
+
+    The tool resolves the route via lexical match against route_short_name and
+    route_long_name in RTD's static GTFS feed, then filters live
+    VehiclePosition entries down to that route.
+
+    Args:
+        query: The user's full natural-language query.
+        max_results: Cap on returned vehicles (default 25).
+
+    Returns:
+        A dict with:
+          - `matched_route`: resolved route metadata (route_id, short_name,
+            long_name, type_label, NextRide URL) or null if no match.
+          - `vehicles`: list of vehicle snapshots (lat, lon, bearing, speed,
+            current_status, headsign, reported_at, NextRide route URL, ...).
+          - `has_realtime`: false on fetch failure or no positions on route.
+          - `fetched_at`: ISO timestamp.
+          - `error`: set on fetch failure or when no route could be resolved.
+    """
+    result: VehiclePositionsResult = await get_vehicle_positions_for_query(
+        query=query, max_results=max_results
+    )
+    return result.model_dump(mode="json")
+
+
 # Tools the tool_agent node binds to its LLM. Append here as new tools land.
-AGENT_TOOLS = [get_neighborhood_weather, get_rtd_service_alerts]
+AGENT_TOOLS = [
+    get_neighborhood_weather,
+    get_rtd_service_alerts,
+    get_rtd_next_arrivals,
+    get_rtd_vehicle_positions,
+]

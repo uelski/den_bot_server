@@ -9,25 +9,21 @@ contract, no exceptions surfaced to the caller.
 
 from __future__ import annotations
 
-import csv
 import logging
 import os
 import re
 import time
 from datetime import datetime, timezone
-from functools import lru_cache
-from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
 from google.transit import gtfs_realtime_pb2
 from pydantic import BaseModel, Field
 
+from app.tools import _rtd_static
+
 load_dotenv()
 logger = logging.getLogger(__name__)
-
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-GTFS_DIR = BASE_DIR / "data" / "rtd_gtfs"
 
 RTD_ALERTS_URL = os.getenv(
     "RTD_ALERTS_URL",
@@ -97,49 +93,6 @@ class ServiceAlertsResult(BaseModel):
     alerts_url: str = ""           # canonical link to the full RTD alerts page
     fetched_at: datetime
     error: str | None = None
-
-
-# --- GTFS ID maps for query filtering ----------------------------------------
-
-
-@lru_cache(maxsize=1)
-def _load_gtfs_id_maps() -> tuple[dict[str, str], dict[str, str]]:
-    """Load (route_id -> route_short_name) and (stop_id -> stop_code) maps.
-
-    Read once and cached for the process lifetime. Returns empty dicts if the
-    GTFS files are missing — in that case query filtering is a no-op (all
-    active alerts are returned).
-    """
-    routes_path = GTFS_DIR / "routes.txt"
-    stops_path = GTFS_DIR / "stops.txt"
-    if not (routes_path.exists() and stops_path.exists()):
-        logger.warning(
-            "GTFS files not found in %s — RTD alert query filtering disabled",
-            GTFS_DIR,
-        )
-        return {}, {}
-
-    route_id_to_short_name: dict[str, str] = {}
-    with routes_path.open(newline="") as f:
-        for row in csv.DictReader(f):
-            rid = (row.get("route_id") or "").strip()
-            short = (row.get("route_short_name") or "").strip()
-            if rid and short:
-                route_id_to_short_name[rid] = short
-
-    stop_id_to_stop_code: dict[str, str] = {}
-    with stops_path.open(newline="") as f:
-        for row in csv.DictReader(f):
-            sid = (row.get("stop_id") or "").strip()
-            code = (row.get("stop_code") or "").strip()
-            if sid and code:
-                stop_id_to_stop_code[sid] = code
-
-    logger.info(
-        "loaded GTFS id maps: %d routes, %d stops",
-        len(route_id_to_short_name), len(stop_id_to_stop_code),
-    )
-    return route_id_to_short_name, stop_id_to_stop_code
 
 
 # --- protobuf -> Pydantic helpers --------------------------------------------
@@ -234,7 +187,8 @@ def _filter_alerts_by_query(
     if not query or not query.strip():
         return alerts
 
-    route_id_map, stop_id_map = _load_gtfs_id_maps()
+    route_id_map = _rtd_static.route_id_to_short_name()
+    stop_id_map = _rtd_static.stop_id_to_stop_code()
     if not route_id_map and not stop_id_map:
         return alerts
 
@@ -332,6 +286,6 @@ async def fetch_active_alerts(
 
 
 def clear_caches() -> None:
-    """Clear the alerts cache and any cached GTFS id maps. Useful for tests."""
+    """Clear the alerts cache and the shared GTFS id-map caches. Useful for tests."""
     _alerts_cache.clear()
-    _load_gtfs_id_maps.cache_clear()
+    _rtd_static.clear_caches()

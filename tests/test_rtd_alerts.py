@@ -11,7 +11,7 @@ import httpx
 import pytest
 from google.transit import gtfs_realtime_pb2
 
-from app.tools import rtd_alerts as alerts_module
+from app.tools import _rtd_static, rtd_alerts as alerts_module
 from app.tools.rtd_alerts import (
     ServiceAlertsResult,
     clear_caches,
@@ -312,10 +312,14 @@ MOCK_STOP_MAP = {
 
 
 def _patch_gtfs_maps():
-    return patch.object(
-        alerts_module,
-        "_load_gtfs_id_maps",
-        return_value=(MOCK_ROUTE_MAP, MOCK_STOP_MAP),
+    """Force the shared static module's id maps to the test fixtures.
+
+    Uses ExitStack-friendly contextmanager semantics by composing two
+    patch.object calls into a single context via patch.multiple."""
+    return patch.multiple(
+        _rtd_static,
+        route_id_to_short_name=MagicMock(return_value=MOCK_ROUTE_MAP),
+        stop_id_to_stop_code=MagicMock(return_value=MOCK_STOP_MAP),
     )
 
 
@@ -410,8 +414,10 @@ class TestQueryFilter:
         feed_bytes = _build_feed(
             ("alert_a", {"header": "a", "routes": ["W"], "active_periods": [(0, 2**31 - 1)]}),
         )
-        with _patch_httpx(feed_bytes), patch.object(
-            alerts_module, "_load_gtfs_id_maps", return_value=({}, {})
+        with _patch_httpx(feed_bytes), patch.multiple(
+            _rtd_static,
+            route_id_to_short_name=MagicMock(return_value={}),
+            stop_id_to_stop_code=MagicMock(return_value={}),
         ):
             result = await fetch_active_alerts(query="anything on the W Line?")
         assert result.total_active == 1

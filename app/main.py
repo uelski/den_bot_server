@@ -93,16 +93,56 @@ def _extract_alerts_fields(output: dict) -> dict:
     }
 
 
+def _extract_arrivals_fields(output: dict) -> dict:
+    matched_stops = output.get("matched_stops") or []
+    arrivals = output.get("arrivals") or []
+    sample = [
+        {
+            "route_short_name": a.get("route_short_name"),
+            "headsign": a.get("headsign"),
+            "minutes_until": a.get("minutes_until"),
+            "stop_name": a.get("stop_name"),
+        }
+        for a in arrivals[:3]
+    ]
+    return {
+        "stop_count": len(matched_stops),
+        "arrival_count": len(arrivals),
+        "resolution_method": output.get("resolution_method"),
+        "has_realtime": bool(output.get("has_realtime")),
+        "sample": sample,
+    }
+
+
+def _extract_vehicles_fields(output: dict) -> dict:
+    matched_route = output.get("matched_route") or {}
+    vehicles = output.get("vehicles") or []
+    return {
+        "route_short_name": matched_route.get("short_name"),
+        "route_long_name": matched_route.get("long_name"),
+        "vehicle_count": len(vehicles),
+        "has_realtime": bool(output.get("has_realtime")),
+    }
+
+
 # Per-tool field schemas. Every payload for a known tool always emits its full
 # keyset (with null for missing values) so the frontend can rely on a fixed
 # discriminated-union shape keyed on `tool`.
 _TOOL_SCHEMAS: dict[str, list[str]] = {
     "get_neighborhood_weather": ["neighborhood_name", "lat", "lon", "period_count"],
     "get_rtd_service_alerts": ["total_active", "filtered_count", "alerts_url", "sample"],
+    "get_rtd_next_arrivals": [
+        "stop_count", "arrival_count", "resolution_method", "has_realtime", "sample",
+    ],
+    "get_rtd_vehicle_positions": [
+        "route_short_name", "route_long_name", "vehicle_count", "has_realtime",
+    ],
 }
 _TOOL_EXTRACTORS = {
     "get_neighborhood_weather": _extract_weather_fields,
     "get_rtd_service_alerts": _extract_alerts_fields,
+    "get_rtd_next_arrivals": _extract_arrivals_fields,
+    "get_rtd_vehicle_positions": _extract_vehicles_fields,
 }
 
 
@@ -172,6 +212,90 @@ def build_map_viewer_links(docs) -> list[dict]:
             "label": f"View {d.metadata.get('service_name', 'data')} map",
         })
     return links
+
+
+# Cap on tool-derived map_viewer URLs surfaced to the frontend. Keeps the
+# external-link panel compact when, for example, a multi-platform station
+# resolves to 4+ paired stops plus distinct routes.
+_TOOL_MAP_VIEWER_LINK_CAP = 4
+
+
+def _arrivals_map_viewer_links(output: dict) -> list[dict]:
+    """Pull NextRide stop URLs (paired directions) from a get_rtd_next_arrivals
+    tool output. Stop labels combine name + desc per design decision."""
+    links: list[dict] = []
+    for stop in output.get("matched_stops") or []:
+        url = stop.get("nextride_url")
+        if not url:
+            continue
+        name = (stop.get("stop_name") or "").strip()
+        desc = (stop.get("stop_desc") or "").strip()
+        if name and desc:
+            label = f"{name} — {desc}"
+        else:
+            label = name or desc or "RTD stop"
+        links.append({"url": url, "label": label})
+    return links
+
+
+def _vehicles_map_viewer_links(output: dict) -> list[dict]:
+    """Pull the matched route's NextRide URL from a get_rtd_vehicle_positions
+    tool output. Single link per call (one route per query)."""
+    matched = output.get("matched_route") or {}
+    url = matched.get("nextride_url")
+    if not url:
+        return []
+    short = (matched.get("short_name") or "").strip()
+    long_name = (matched.get("long_name") or "").strip()
+    if short and long_name:
+        label = f"{short} — {long_name}"
+    else:
+        label = short or long_name or "RTD route"
+    return [{"url": url, "label": label}]
+
+
+_TOOL_MAP_VIEWER_BUILDERS = {
+    "get_rtd_next_arrivals": _arrivals_map_viewer_links,
+    "get_rtd_vehicle_positions": _vehicles_map_viewer_links,
+}
+
+
+def build_tool_map_viewer_links(tool_name: str, output) -> list[dict]:
+    """Build the `map_viewer` SSE payload from a tool's structured return.
+
+    Mirrors `build_map_viewer_links` for the tool path. Per-tool dispatch via
+    `_TOOL_MAP_VIEWER_BUILDERS`; URL-deduped; capped at the top
+    `_TOOL_MAP_VIEWER_LINK_CAP` unique entries (first-seen label wins). Returns
+    [] when the tool didn't produce links or its output isn't a dict.
+    """
+    builder = _TOOL_MAP_VIEWER_BUILDERS.get(tool_name)
+    if builder is None:
+        return []
+
+    if hasattr(output, "content"):
+        try:
+            content = output.content
+            if isinstance(content, str) and content.strip().startswith("{"):
+                content = json.loads(content)
+            output = content
+        except (ValueError, TypeError):
+            pass
+    if not isinstance(output, dict):
+        return []
+    if output.get("error"):
+        return []
+
+    seen: set[str] = set()
+    capped: list[dict] = []
+    for link in builder(output):
+        url = link.get("url")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        capped.append(link)
+        if len(capped) >= _TOOL_MAP_VIEWER_LINK_CAP:
+            break
+    return capped
 
 
 @app.get("/health")
@@ -252,6 +376,12 @@ async def query_endpoint(body: QueryBody):
                         **summary,
                     })
                     yield f"event: tool_result\ndata: {payload}\n\n"
+
+                    # Surface NextRide deep links from arrivals/vehicles tools
+                    # via the same map_viewer event the retrieval path emits.
+                    tool_links = build_tool_map_viewer_links(tool_name, output)
+                    if tool_links:
+                        yield f"event: map_viewer\ndata: {json.dumps({'urls': tool_links})}\n\n"
 
                 # Scraper finished — emit scraped map_viewer_url if present
                 elif event_type == "on_chain_end" and node == "scraper":
