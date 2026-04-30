@@ -21,3 +21,7 @@ enriched_denver_catalog_v2.json
 # RTD GTFS data — large, replaceable from the public download
 data/rtd_gtfs/
 data/google_transit.zip
+
+# Denver parks geojson — replaceable from the Denver Open Data Catalog hub
+# (search "Park Boundary" on opendata-geospatialdenver.hub.arcgis.com).
+data/ODC_PARK_PARKLAND_A_*.geojson
