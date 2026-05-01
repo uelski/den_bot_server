@@ -51,6 +51,9 @@ QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "denver_gis_catalog")
 
 SERVICE_NAME = "RTD Transit (GTFS)"
+# Citation URL shared by every rtd_stop and rtd_route doc. Drives the sources
+# SSE event and collapses all RTD docs to a single source entry per query.
+RTD_HUB_URL = "https://app.rtd-denver.com/"
 STOP_URL_TEMPLATE = "https://app.rtd-denver.com/nextride/stop/{stop_id}"
 # Slug derivation lives in app.tools._rtd_static.nextride_route_slug — the
 # rule is: rail uses route_short_name (W, D, ...), everything else uses
@@ -208,8 +211,10 @@ def build_stop_documents(
                     "route_count": len(route_ids),
                     "wheelchair_boarding": wheelchair,
                     "service_name": SERVICE_NAME,
-                    "base_url": stop_url,
-                    "hub_url": stop_url,
+                    "display_name": stop_name,
+                    "base_url": RTD_HUB_URL,
+                    "hub_url": RTD_HUB_URL,
+                    "map_url": stop_url,
                     "has_layers": False,
                     "full_metadata": json.dumps(full_metadata, default=str),
                 },
@@ -238,12 +243,21 @@ def build_route_documents(
         type_label = ROUTE_TYPE_LABELS.get(route_type, "Transit")
         stop_count = stop_count_by_route.get(route_id, 0)
 
-        display_name = (route_long_name or route_short_name).strip()
+        embedded_label = (route_long_name or route_short_name).strip()
         page_content = (
-            f"The {route_short_name} {display_name} is an RTD {type_label} route "
+            f"The {route_short_name} {embedded_label} is an RTD {type_label} route "
             f"operated by {agency_name}. It serves {stop_count} stops across the "
             f"Denver metro area."
         ).replace("  ", " ")
+
+        # display_name drives the per-route map_viewer label. Template form
+        # "{short} - {long}" when both exist (e.g. "15 - East Colfax"); fall
+        # back to whichever single name is populated, or route_id as a last
+        # resort.
+        if route_short_name and route_long_name and route_short_name != route_long_name:
+            display_name = f"{route_short_name} - {route_long_name}"
+        else:
+            display_name = route_short_name or route_long_name or route_id
 
         route_slug = nextride_route_slug(route_id, route_short_name)
         route_url = ROUTE_URL_TEMPLATE.format(route_slug=route_slug)
@@ -270,8 +284,10 @@ def build_route_documents(
                     "route_color": route_color,
                     "stop_count": stop_count,
                     "service_name": SERVICE_NAME,
-                    "base_url": route_url,
-                    "hub_url": route_url,
+                    "display_name": display_name,
+                    "base_url": RTD_HUB_URL,
+                    "hub_url": RTD_HUB_URL,
+                    "map_url": route_url,
                     "has_layers": False,
                     "full_metadata": json.dumps(full_metadata, default=str),
                 },

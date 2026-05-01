@@ -187,8 +187,8 @@ class TestBuildParkDocument:
             "address_line1", "cross_streets",
             "council_district", "maint_district",
             "globalid", "objectid",
-            "location", "service_name",
-            "base_url", "hub_url",
+            "location", "service_name", "display_name",
+            "base_url", "hub_url", "map_url",
             "has_layers", "full_metadata",
         ):
             assert key in doc.metadata, f"missing metadata key {key!r}"
@@ -202,24 +202,36 @@ class TestBuildParkDocument:
         doc = parks_module.build_park_document(_feature())
         assert doc.metadata["location"] == {"lat": 39.7339, "lon": -104.9631}
 
-    def test_hub_url_is_per_park_google_maps(self, parks_module):
+    def test_map_url_is_per_park_google_maps(self, parks_module):
         doc = parks_module.build_park_document(_feature())
-        assert doc.metadata["hub_url"] == (
+        assert doc.metadata["map_url"] == (
             "https://www.google.com/maps/search/?api=1&query=39.7339,-104.9631"
         )
 
-    def test_base_url_is_dataset_hub_constant(self, parks_module):
-        # Two parks at different coordinates share the same base_url
+    def test_base_url_and_hub_url_are_dataset_hub_constant(self, parks_module):
+        # Two parks at different coordinates share the same base_url + hub_url
+        # (both point to the dataset hub for citation; map_url carries the
+        # per-park deep link).
         doc1 = parks_module.build_park_document(_feature())
         doc2 = parks_module.build_park_document(_feature(LATITUDE=39.5, LONGITUDE=-105.0))
         assert doc1.metadata["base_url"] == doc2.metadata["base_url"]
+        assert doc1.metadata["hub_url"] == doc2.metadata["hub_url"]
+        assert doc1.metadata["base_url"] == doc1.metadata["hub_url"]
         assert "opendata-geospatialdenver.hub.arcgis.com" in doc1.metadata["base_url"]
         assert "e752556524024fbfac700b35f33c0f2c" in doc1.metadata["base_url"]
 
-    def test_per_park_hub_urls_differ(self, parks_module):
+    def test_per_park_map_urls_differ(self, parks_module):
         doc1 = parks_module.build_park_document(_feature(LATITUDE=39.7, LONGITUDE=-104.9))
         doc2 = parks_module.build_park_document(_feature(LATITUDE=39.5, LONGITUDE=-105.0))
-        assert doc1.metadata["hub_url"] != doc2.metadata["hub_url"]
+        assert doc1.metadata["map_url"] != doc2.metadata["map_url"]
+
+    def test_display_name_is_formal_name(self, parks_module):
+        doc = parks_module.build_park_document(_feature())
+        assert doc.metadata["display_name"] == "Cheesman Park"
+
+    def test_display_name_falls_back_to_location_when_formal_name_missing(self, parks_module):
+        doc = parks_module.build_park_document(_feature(FORMAL_NAME=None))
+        assert doc.metadata["display_name"] == "Cheesman"
 
     def test_full_metadata_is_json_string(self, parks_module):
         doc = parks_module.build_park_document(_feature())

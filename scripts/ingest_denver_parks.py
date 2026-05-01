@@ -9,11 +9,15 @@ Source: Denver Open Data Catalog "Park Boundary" dataset
 The geojson is gitignored; download manually into data/ before running.
 
 URL plumbing notes:
-  - hub_url is the per-park Google Maps deep link built from LATITUDE/LONGITUDE.
-    The map_viewer SSE event dedups by hub_url, so this gives one clickable
-    map link per park surfaced.
-  - base_url is the dataset-level ArcGIS hub URL (constant across all parks);
-    it surfaces in the sources event as a single citation entry.
+  - base_url and hub_url both point to the dataset-level ArcGIS hub URL
+    (constant across all parks). They drive the sources event, which dedups
+    via service_name+base_url+hub_url so all parks collapse to one citation.
+  - map_url is the per-park Google Maps deep link built from LATITUDE/
+    LONGITUDE. It drives the map_viewer event; dedup is by URL so each
+    park surfaces a distinct clickable.
+  - display_name is the formal park name (e.g. "City Park"); it labels
+    each map_viewer entry. service_name stays "Denver Parks" so the
+    sources panel collapses to one entry per dataset.
 
 Run:
   python scripts/ingest_denver_parks.py            # append (refuses if denver_park docs exist)
@@ -209,8 +213,10 @@ def build_park_document(feature: dict) -> Document | None:
             "objectid": props.get("OBJECTID"),
             "location": {"lat": lat, "lon": lon},
             "service_name": SERVICE_NAME,
+            "display_name": name,
             "base_url": DATASET_HUB_URL,
-            "hub_url": gmaps_url,
+            "hub_url": DATASET_HUB_URL,
+            "map_url": gmaps_url,
             "has_layers": False,
             "full_metadata": json.dumps(full_metadata, default=str),
         },
