@@ -194,22 +194,26 @@ def _summarize_tool_output(tool_name: str, output) -> dict:
 def build_map_viewer_links(docs) -> list[dict]:
     """Build the deduplicated `map_viewer` SSE link list from retrieved docs.
 
-    Dedup key: the normalized URL (after stripping trailing slash and `/about`).
-    The first doc contributing a given URL wins the label.
+    URL: prefer per-entity `map_url` (parks Google Maps deep link, RTD
+    NextRide stop/route URL); fall back to `hub_url` for catalog and
+    neighborhood docs that don't set `map_url`. Label: prefer per-entity
+    `display_name`; fall back to `service_name`. Dedup key: the normalized
+    URL (after stripping trailing slash and `/about`).
     """
     seen: set[str] = set()
     links: list[dict] = []
     for d in docs:
-        hub_url = d.metadata.get("hub_url")
-        if not hub_url:
+        url_raw = d.metadata.get("map_url") or d.metadata.get("hub_url")
+        if not url_raw:
             continue
-        url = hub_url.rstrip("/").removesuffix("/about")
+        url = url_raw.rstrip("/").removesuffix("/about")
         if url in seen:
             continue
         seen.add(url)
+        label_name = d.metadata.get("display_name") or d.metadata.get("service_name", "data")
         links.append({
             "url": url,
-            "label": f"View {d.metadata.get('service_name', 'data')} map",
+            "label": f"View {label_name} map",
         })
     return links
 

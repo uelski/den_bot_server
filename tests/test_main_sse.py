@@ -71,6 +71,25 @@ class TestBuildSourcesPayload:
         assert "neighborhood_name" not in result[0]
         assert result[1]["neighborhood_name"] == "Capitol Hill"
 
+    def test_multiple_park_docs_collapse_to_one_source(self, make_doc):
+        # Parks share service_name + base_url + hub_url across all docs; the
+        # per-park uniqueness lives on map_url/display_name and only matters
+        # for map_viewer. Sources should dedup to a single citation entry.
+        docs = [
+            make_doc(
+                service_name="Denver Parks",
+                base_url="https://hub.example/parks",
+                hub_url="https://hub.example/parks",
+                map_url=f"https://maps.example/{i}",
+                display_name=f"Park {i}",
+                doc_type="denver_park",
+            )
+            for i in range(5)
+        ]
+        result = build_sources_payload(docs)
+        assert len(result) == 1
+        assert result[0]["service_name"] == "Denver Parks"
+
 
 class TestBuildMapViewerLinks:
     def test_empty_docs_returns_empty(self):
@@ -106,6 +125,67 @@ class TestBuildMapViewerLinks:
         docs = [catalog_doc, neighborhood_doc_factory("Capitol Hill")]
         result = build_map_viewer_links(docs)
         assert len(result) == 2
+
+    def test_map_url_preferred_over_hub_url(self, make_doc):
+        doc = make_doc(
+            service_name="Denver Parks",
+            base_url="https://hub.example/dataset",
+            hub_url="https://hub.example/dataset",
+            map_url="https://www.google.com/maps/search/?api=1&query=39.73,-104.96",
+        )
+        result = build_map_viewer_links([doc])
+        assert len(result) == 1
+        assert result[0]["url"] == (
+            "https://www.google.com/maps/search/?api=1&query=39.73,-104.96"
+        )
+
+    def test_display_name_preferred_over_service_name(self, make_doc):
+        doc = make_doc(
+            service_name="Denver Parks",
+            base_url="https://hub.example/dataset",
+            hub_url="https://hub.example/dataset",
+            map_url="https://maps.example/city-park",
+            display_name="City Park",
+        )
+        result = build_map_viewer_links([doc])
+        assert result[0]["label"] == "View City Park map"
+
+    def test_unique_map_urls_emit_separate_entries_with_unique_labels(self, make_doc):
+        # Mirrors the parks/RTD shape: shared dataset hub_url + service_name,
+        # unique per-entity map_url + display_name. All entries should surface
+        # with distinct labels.
+        docs = [
+            make_doc(
+                service_name="Denver Parks",
+                base_url="https://hub.example/parks",
+                hub_url="https://hub.example/parks",
+                map_url=f"https://maps.example/{slug}",
+                display_name=name,
+            )
+            for slug, name in [("city-park", "City Park"), ("cheesman", "Cheesman Park")]
+        ]
+        result = build_map_viewer_links(docs)
+        assert len(result) == 2
+        assert {r["label"] for r in result} == {
+            "View City Park map", "View Cheesman Park map",
+        }
+
+    def test_shared_hub_url_with_unique_map_urls_does_not_dedup(self, make_doc):
+        # The fix's whole point: 5 RTD stops with the same hub_url collapse to
+        # ONE source entry but produce FIVE map_viewer entries (deduped by
+        # map_url, not hub_url).
+        docs = [
+            make_doc(
+                service_name="RTD Transit (GTFS)",
+                base_url="https://app.rtd-denver.com/",
+                hub_url="https://app.rtd-denver.com/",
+                map_url=f"https://app.rtd-denver.com/nextride/stop/S{i}",
+                display_name=f"Stop {i}",
+            )
+            for i in range(5)
+        ]
+        result = build_map_viewer_links(docs)
+        assert len(result) == 5
 
 
 WEATHER_TOOL = "get_neighborhood_weather"

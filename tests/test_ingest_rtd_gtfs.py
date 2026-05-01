@@ -177,26 +177,34 @@ class TestBuildStopDocuments:
         for key in (
             "doc_type", "stop_id", "stop_code", "stop_name", "location",
             "route_ids", "route_short_names", "route_count",
-            "service_name", "base_url", "hub_url", "has_layers", "full_metadata",
+            "service_name", "display_name",
+            "base_url", "hub_url", "map_url",
+            "has_layers", "full_metadata",
         ):
             assert key in s2.metadata, f"missing metadata key {key!r}"
 
         assert s2.metadata["doc_type"] == "rtd_stop"
         assert s2.metadata["service_name"] == "RTD Transit (GTFS)"
+        assert s2.metadata["display_name"] == "Welton & 30th"
         assert s2.metadata["has_layers"] is False
         assert s2.metadata["location"] == {"lat": 39.7591, "lon": -104.9834}
         assert sorted(s2.metadata["route_short_names"]) == ["15", "W"]
         assert s2.metadata["route_count"] == 2
 
-    def test_url_templates_use_stop_id(
+    def test_stop_urls_split_hub_vs_map(
         self, gtfs_module, stops_df_typed, stop_times_df, trips_df, routes_df
     ):
+        # base_url + hub_url collapse to the RTD citation root (constant across
+        # all stops); map_url is the per-stop NextRide deep link.
         index = gtfs_module.build_stop_route_index(stop_times_df, trips_df)
         docs = gtfs_module.build_stop_documents(stops_df_typed, index, routes_df)
         s1 = next(d for d in docs if d.metadata["stop_id"] == "S1")
-        expected = "https://app.rtd-denver.com/nextride/stop/S1"
-        assert s1.metadata["base_url"] == expected
-        assert s1.metadata["hub_url"] == expected
+        s2 = next(d for d in docs if d.metadata["stop_id"] == "S2")
+        assert s1.metadata["base_url"] == "https://app.rtd-denver.com/"
+        assert s1.metadata["hub_url"] == "https://app.rtd-denver.com/"
+        assert s1.metadata["base_url"] == s2.metadata["base_url"]
+        assert s1.metadata["map_url"] == "https://app.rtd-denver.com/nextride/stop/S1"
+        assert s2.metadata["map_url"] == "https://app.rtd-denver.com/nextride/stop/S2"
 
     def test_page_content_includes_routes_and_location(
         self, gtfs_module, stops_df_typed, stop_times_df, trips_df, routes_df
@@ -266,24 +274,62 @@ class TestBuildRouteDocuments:
         assert labels["R1"] == "Bus"        # type 3
         assert labels["103W"] == "Light Rail" # type 0
 
-    def test_url_templates_use_nextride_slug(
+    def test_route_urls_split_hub_vs_map(
         self, gtfs_module, routes_df, stop_times_df, trips_df
     ):
         # Slug rule (see _rtd_static.nextride_route_slug):
         #   - rail-shape ids ("103W") use route_short_name -> /route/W
         #   - everything else uses route_id -> /route/R1
+        # base_url + hub_url collapse to the RTD citation root; map_url is
+        # the per-route NextRide deep link.
         index = gtfs_module.build_stop_route_index(stop_times_df, trips_df)
         docs = gtfs_module.build_route_documents(routes_df, index, "RTD")
         r1 = next(d for d in docs if d.metadata["route_id"] == "R1")
+        assert r1.metadata["base_url"] == "https://app.rtd-denver.com/"
+        assert r1.metadata["hub_url"] == "https://app.rtd-denver.com/"
         # R1 doesn't match ^\d+[A-Z]+$, so route_id wins as the slug.
-        expected = "https://app.rtd-denver.com/nextride/route/R1"
-        assert r1.metadata["base_url"] == expected
-        assert r1.metadata["hub_url"] == expected
+        assert r1.metadata["map_url"] == "https://app.rtd-denver.com/nextride/route/R1"
         r2 = next(d for d in docs if d.metadata["route_id"] == "103W")
+        assert r2.metadata["base_url"] == "https://app.rtd-denver.com/"
         # 103W matches rail regex, so short_name wins.
-        expected_r2 = "https://app.rtd-denver.com/nextride/route/W"
-        assert r2.metadata["base_url"] == expected_r2
-        assert r2.metadata["hub_url"] == expected_r2
+        assert r2.metadata["map_url"] == "https://app.rtd-denver.com/nextride/route/W"
+
+    def test_route_display_name_templated_when_both_names_present(
+        self, gtfs_module, routes_df, stop_times_df, trips_df
+    ):
+        index = gtfs_module.build_stop_route_index(stop_times_df, trips_df)
+        docs = gtfs_module.build_route_documents(routes_df, index, "RTD")
+        r1 = next(d for d in docs if d.metadata["route_id"] == "R1")
+        # short=15, long=Colfax -> "15 - Colfax"
+        assert r1.metadata["display_name"] == "15 - Colfax"
+
+    def test_route_display_name_collapses_when_short_equals_long(
+        self, gtfs_module, stop_times_df, trips_df
+    ):
+        # When short_name and long_name are identical (e.g. "W"/"W"), avoid
+        # the awkward "W - W" by using just the single name.
+        df = pd.DataFrame([{
+            "route_id": "1", "agency_id": "RTD",
+            "route_short_name": "W", "route_long_name": "W",
+            "route_type": "0", "route_color": "FF0000",
+        }])
+        df["route_type"] = df["route_type"].astype(int)
+        index = gtfs_module.build_stop_route_index(stop_times_df, trips_df)
+        docs = gtfs_module.build_route_documents(df, index, "RTD")
+        assert docs[0].metadata["display_name"] == "W"
+
+    def test_route_display_name_falls_back_to_short_only(
+        self, gtfs_module, stop_times_df, trips_df
+    ):
+        df = pd.DataFrame([{
+            "route_id": "FREE", "agency_id": "RTD",
+            "route_short_name": "FREE", "route_long_name": "",
+            "route_type": "3", "route_color": "",
+        }])
+        df["route_type"] = df["route_type"].astype(int)
+        index = gtfs_module.build_stop_route_index(stop_times_df, trips_df)
+        docs = gtfs_module.build_route_documents(df, index, "RTD")
+        assert docs[0].metadata["display_name"] == "FREE"
 
     def test_page_content_uses_long_name_and_label(
         self, gtfs_module, routes_df, stop_times_df, trips_df
