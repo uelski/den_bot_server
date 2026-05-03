@@ -25,6 +25,28 @@ Tracing is live. `.env` carries `LANGCHAIN_API_KEY`, `LANGCHAIN_TRACING_V2=true`
 - NWS reliability: 30-min TTL cache and 4-decimal coordinate rounding to avoid 301 redirects.
 - Adding the next tool is now: write the function, decorate with `@tool`, append to `AGENT_TOOLS`. No graph or router changes required.
 
+### URL field shape refactor — done (commit `4ee6dd6`)
+SSE contract update that split the dataset citation URL from the per-entity map URL on parks + RTD docs (and now seeds the convention for every later ingest). `app/main.py:build_map_viewer_links` prefers `metadata.map_url` over `hub_url` for the URL and `display_name` over `service_name` for the label — both backward-compatible. See `ingest_field_shape_convention.md` in memory for the authoritative reference.
+
+### More data sources — substantially done
+Six new data sources shipped using the patterns above. `ingest_field_shape_convention.md` in memory codifies the shape so future sources are mostly templated work.
+
+| Source | Pattern | Doc count | Branch / commit |
+|---|---|---|---|
+| Parks | POI (one doc per park) | 374 | `feature/parks-data` (PR #17) |
+| Crime | Aggregate per neighborhood | 78 | `feature/crime-data` (PR #18) |
+| Libraries | POI | 27 | `feature/new-city-data` `5a1da5c` |
+| Rec centers | POI | 31 | `feature/new-city-data` `15f5b3f` |
+| Non-public schools | POI (with `institution_type` discriminator) | 46 | `feature/new-city-data` `e443167` |
+| Public schools | POI (with `institution_type` discriminator) | 232 | `feature/new-city-data` `b656dec` |
+| Traffic accidents | Aggregate per neighborhood | ~78 | `feature/new-city-data` `0568075` |
+
+Remaining "More data sources" candidates from earlier — patterns now well-established, each is roughly half a day:
+- **Building permits** — POI shape; "what's being built in RiNo lately" type queries.
+- **311 call data** — likely aggregate-per-neighborhood; "what are common complaints in Five Points".
+- **ACS vintages beyond 2017–2021** — comparable demographics over time.
+- **OSM / additional POI data** — could enrich existing summaries rather than ship as new doc types.
+
 ---
 
 ## 1. Memory (multi-turn conversations)
@@ -59,34 +81,23 @@ Today the graph is stateless per request — each `/query` starts from scratch. 
 
 **Effort**: 1-2 days depending on GCP familiarity.
 
-## 3. More data sources
+## 3. Geo-filtered retrieval (now unblocked)
 
-The catalog today is Denver GIS services from ArcGIS FeatureServer plus per-neighborhood demographic chunks. Plenty of other high-signal Denver open data to pull in.
+Almost every doc type now carries `metadata.location = {lat, lon}` — demographics, parks, libraries, rec centers, schools, RTD stops, plus copied centroids on the per-neighborhood crime / traffic docs. Qdrant supports `geo.location` filters natively, so we can now filter "parks within 1km of resolved neighborhood centroid" before semantic search.
 
-**Top candidates from the ArcGIS catalog** (already partially indexed via `scripts/ingest.py`, but their child layers / individual records aren't yet retrievable):
-- **Crime data** (ArcGIS catalog) — Denver Police publishes incident-level data; high agent utility for "is X neighborhood safe" type questions. Needs thoughtful privacy framing and probably a temporal filter (recent vs historical).
-- **Parks** (ArcGIS catalog) — POI-style data: park name, amenities, location. Pairs well with neighborhood lookups ("parks near Capitol Hill") and the lat/lon centroids we already have.
-- **Building permits** (ArcGIS catalog) — city-wide development signal; "what's being built in RiNo lately" queries.
+**Tasks**:
+- Pick a representative query like "parks near Capitol Hill" and add a geo-filter pass in `app/graph/nodes/retriever.py` when the intent_router detects a "near X neighborhood" pattern.
+- Resolve the neighborhood → centroid via the existing demographics docs (or the resolver+geojson directly).
+- Apply Qdrant `geo.radius` filter to narrow the candidate set before hybrid search runs.
+- Likely tool path too — could become a `find_nearby` tool that takes a neighborhood + doc_type filter and returns ranked points.
 
-**Other candidates** (rougher prioritization by agent utility):
-- **311 call data** — "what are common complaints in Five Points" type queries. CSV/JSON from opendata-geospatialdenver; not a FeatureServer.
-- **ACS vintages beyond 2017-2021** — let users compare a neighborhood's demographics over time.
-- **OSM / POI data** — schools, transit stops; could enrich neighborhood summaries.
-- **Non-ArcGIS Denver sources** — open data portal CSVs without FeatureServer backing; separate ingestion path.
-
-**Tasks** (per source):
-- Write a small enrichment script that transforms the raw source into the same Document shape used for either the catalog or neighborhood-demographics pattern.
-- Decide on chunking strategy (whole-record, per-section, per-incident, etc.).
-- Tag with a distinct `doc_type` so retrieval filters and SSE rendering can branch appropriately (mirror the `neighborhood_demographics` pattern).
-- Add any source-specific `hub_url` logic.
-
-**Decision**: each source roughly doubles the ingestion surface area. Pick one of crime / parks / building permits to ship first and generalize patterns from there. Parks is probably the lowest-effort starter (smallest dataset, cleanest schema, well-defined POI shape) before tackling the higher-value but messier crime/permits data.
-
-**Effort**: ~1 day per source for initial integration, less for subsequent ones as patterns solidify.
+**Effort**: ~half a day for the initial retriever-side filter; another half-day if we wrap as a tool.
 
 ---
 
 ## Not on the list but worth noting
 
 - **Hub URL audit** has its own workflow in `scripts/audit_hub_urls.py` + `scripts/apply_hub_url_updates.py` — run periodically (quarterly?) or when broken links are reported. See `hub_url_audit_system.md` in memory.
-- **Frontend adaptation** to the enriched `sources` SSE payload (rendering neighborhood-demographics entries with `neighborhood_name`) and the new `tool_call` / `tool_result` events — lives on the frontend repo.
+- **Frontend adaptation** to the enriched `sources` SSE payload (rendering neighborhood-demographics entries with `neighborhood_name`) and the `tool_call` / `tool_result` events — lives on the frontend repo. The post-refactor `map_url` / `display_name` fields are backward-compatible so nothing on the frontend should have broken when those landed.
+- **Resolver wired into retriever** — discussed but deferred. Canonicalize neighborhood names before the retriever runs (so "RiNo poverty" → "Five Points poverty"). Small future change.
+- **LLM-grounded route name resolver** — analogue to the neighborhood resolver for "W Line", "Route 15". Tier 3 ships with a lexical fallback in `rtd_vehicles.resolve_route_id`. Upgrade when traces show lexical failures.
