@@ -25,3 +25,6 @@ data/google_transit.zip
 # Denver parks geojson — replaceable from the Denver Open Data Catalog hub
 # (search "Park Boundary" on opendata-geospatialdenver.hub.arcgis.com).
 data/ODC_PARK_PARKLAND_A_*.geojson
+
+# Crime csv - large
+data/ODC_CRIME_OFFENSES_P_6980386009720568002.csv
