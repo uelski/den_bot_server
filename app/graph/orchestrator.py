@@ -1,5 +1,7 @@
 """orchestrator.py — StateGraph assembly and edge wiring."""
 
+from typing import Any
+
 from langgraph.graph import END, START, StateGraph
 
 from app.graph.nodes.generator import generator
@@ -44,7 +46,10 @@ def route_after_intent(state: AgentState) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def build_graph():
+def build_graph(checkpointer: Any | None = None):
+    """Compile the StateGraph. Pass `checkpointer=` to enable multi-turn
+    memory (typically an AsyncRedisSaver from app/graph/memory.py); leave
+    None for stateless single-turn (used by tests and the no-Redis fallback)."""
     builder = StateGraph(AgentState)
 
     # Register nodes
@@ -96,7 +101,10 @@ def build_graph():
     builder.add_edge("generate", END)
     builder.add_edge("scraper", END)
 
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)
 
 
+# Module-level stateless graph — used by tests and as a fallback when
+# REDIS_URL is unset. The memory-enabled graph is compiled at FastAPI
+# lifespan startup in app/main.py and stored on app.state.
 graph = build_graph()

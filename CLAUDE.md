@@ -46,9 +46,11 @@ State → Retrieve → Grade → [Generate | Scrape → Generate]
 - GEMINI_API_KEY
 - QDRANT_URL (default: http://localhost:6333)
 - QDRANT_COLLECTION_NAME (default: denver_gis_catalog)
+- REDIS_URL (default: redis://localhost:6379) — backs the LangGraph checkpointer for multi-turn memory; unset to run single-turn
+- TAVILY_API_KEY — required for the search_denver_gov agent tool
 
 ## Dev Notes
-- Run Qdrant locally: `docker run -p 6333:6333 qdrant/qdrant`
+- Local infra: `docker compose up -d` (brings up Qdrant + Redis with persistent named volumes; see `docker-compose.yml`)
 - Ingest: `python scripts/ingest.py`
 - Run API: `uvicorn app.main:app --reload`
 - force_recreate=True in ingest.py is intentional for dev; set False for prod

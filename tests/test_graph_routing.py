@@ -43,6 +43,21 @@ class TestGraphStructure:
         node_names = set(g.get_graph().nodes.keys())
         assert "pg_query" not in node_names
 
+    def test_build_graph_accepts_optional_checkpointer(self):
+        """The memory wiring passes an AsyncRedisSaver here at FastAPI lifespan
+        startup. We pass None in tests; just verify the kwarg is accepted and
+        the graph still compiles."""
+        g = build_graph(checkpointer=None)
+        assert g is not None
+
+    def test_build_graph_compiles_with_a_real_checkpointer(self):
+        """Use the in-memory MemorySaver as a stand-in (already a langgraph
+        dep) — verifies the compile path actually runs the checkpointer
+        through StateGraph.compile, not just stores it."""
+        from langgraph.checkpoint.memory import MemorySaver
+        g = build_graph(checkpointer=MemorySaver())
+        assert g is not None
+
 
 class TestRouteAfterRouter:
     def test_requires_rag_routes_to_retriever(self):

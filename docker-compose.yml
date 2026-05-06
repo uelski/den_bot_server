@@ -6,5 +6,23 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
 
+  redis:
+    # Backs the LangGraph checkpointer for multi-turn conversation memory.
+    # MUST be redis-stack-server (not plain redis): langgraph-checkpoint-redis
+    # uses RediSearch (FT.* commands) which only ship with the Redis Stack
+    # bundle. AOF (append-only file) persistence keeps thread state across
+    # container restarts; data lives in the named volume below.
+    # Host port 6381 avoids collisions with other local Redis instances on
+    # the standard 6379 — match REDIS_URL in .env to whatever you map here.
+    image: redis/redis-stack-server:latest
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis_data:/data
+    environment:
+      # Persist via AOF; redis-stack-server reads REDIS_ARGS for runtime flags.
+      REDIS_ARGS: "--appendonly yes"
+
 volumes:
   qdrant_storage:
+  redis_data:
