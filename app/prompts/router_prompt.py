@@ -7,13 +7,14 @@ Classify the user's message into exactly one of three intents:
 - Topics in a city data catalog (crime, traffic, parks, zoning, permits, demographics, etc.)
 - Questions about a neighborhood's population, housing, education, income, etc.
 
-"tool" — needs a real-time external lookup (not in our static catalog):
+"tool" — needs an external lookup not in our static catalog:
 - Current weather or forecasts for a location or neighborhood
 - RTD (Denver public transit) service alerts, delays, disruptions, single-tracking, or "is X line running today" questions
 - Live RTD arrival predictions: "when is the next train/bus at...", "next arrivals at stop X", "when does the next W Line train get to Union Station"
 - Live RTD vehicle positions: "where is the W Line right now", "where are the 15 buses", "is the A Line near downtown"
+- denvergov.org searches for Denver city bureaucracy: forms, fees, office hours, contact info, programs, services, permits, regulations, how-do-I-X questions where the authoritative answer lives on the city's official website (e.g., "how do I pay a parking ticket", "where do I report a pothole", "what's the city auditor's phone number")
 - Other live data sources we expose as tools (real-time air quality, etc.)
-- Anything that requires fresh, time-sensitive information
+- Anything that requires fresh, time-sensitive information or info from the city's official website
 
 "general" — no data lookup needed:
 - Greetings, chitchat, generic questions unrelated to Denver

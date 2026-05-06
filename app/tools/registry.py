@@ -21,6 +21,11 @@ from app.tools.rtd_vehicles import (
     VehiclePositionsResult,
     get_vehicle_positions_for_query,
 )
+from app.tools.denvergov_search import (
+    DEFAULT_MAX_RESULTS as DENVERGOV_DEFAULT_MAX_RESULTS,
+    DenverGovSearchResult,
+    search_denvergov_for_query,
+)
 from app.tools.weather import (
     DEFAULT_PERIODS,
     WeatherForecast,
@@ -157,10 +162,50 @@ async def get_rtd_vehicle_positions(query: str, max_results: int = DEFAULT_MAX_V
     return result.model_dump(mode="json")
 
 
+@tool
+async def search_denver_gov(
+    query: str, max_results: int = DENVERGOV_DEFAULT_MAX_RESULTS
+) -> dict:
+    """Search the official Denver city government website (denvergov.org) for
+    bureaucratic information our internal data catalog can't answer.
+
+    Use this for questions about Denver city services, programs, forms, fees,
+    permits, regulations, office hours, contact information, or how-do-I-X
+    questions where the authoritative answer lives on the city's official
+    website. Examples:
+      - "how do I pay a Denver parking ticket?"
+      - "what are Denver's leaf collection rules?"
+      - "when is the city auditor's office open?"
+      - "how do I renew a Denver dog license?"
+      - "where do I report a pothole?"
+
+    Do NOT use this tool for queries we already cover via internal data:
+    parks, libraries, rec centers, schools, demographics, crime stats,
+    traffic accident stats, RTD transit (alerts, arrivals, vehicle positions),
+    or weather. Use those tools / retrieval instead.
+
+    Args:
+        query: The user's natural-language query.
+        max_results: Cap on results returned (default 3).
+
+    Returns:
+        A dict with:
+          - `query`: the search string used.
+          - `results`: list of {title, url, snippet, score} hits from
+            denvergov.org. Empty when nothing matched.
+          - `error`: set on failure (missing API key, network error, etc.).
+    """
+    result: DenverGovSearchResult = await search_denvergov_for_query(
+        query, max_results=max_results
+    )
+    return result.model_dump()
+
+
 # Tools the tool_agent node binds to its LLM. Append here as new tools land.
 AGENT_TOOLS = [
     get_neighborhood_weather,
     get_rtd_service_alerts,
     get_rtd_next_arrivals,
     get_rtd_vehicle_positions,
+    search_denver_gov,
 ]

@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.graph.orchestrator import graph
+from app.tools.denvergov_search import DOC_TYPE as DENVERGOV_SEARCH_DOC_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,22 @@ def _extract_vehicles_fields(output: dict) -> dict:
     }
 
 
+def _extract_denvergov_search_fields(output: dict) -> dict:
+    results = output.get("results") or []
+    return {
+        "query": output.get("query"),
+        "result_count": len(results),
+        "sample": [
+            {
+                "title": r.get("title"),
+                "url": r.get("url"),
+                "snippet": (r.get("snippet") or "")[:200],
+            }
+            for r in results[:2]
+        ],
+    }
+
+
 # Per-tool field schemas. Every payload for a known tool always emits its full
 # keyset (with null for missing values) so the frontend can rely on a fixed
 # discriminated-union shape keyed on `tool`.
@@ -137,12 +154,14 @@ _TOOL_SCHEMAS: dict[str, list[str]] = {
     "get_rtd_vehicle_positions": [
         "route_short_name", "route_long_name", "vehicle_count", "has_realtime",
     ],
+    "search_denver_gov": ["query", "result_count", "sample"],
 }
 _TOOL_EXTRACTORS = {
     "get_neighborhood_weather": _extract_weather_fields,
     "get_rtd_service_alerts": _extract_alerts_fields,
     "get_rtd_next_arrivals": _extract_arrivals_fields,
     "get_rtd_vehicle_positions": _extract_vehicles_fields,
+    "search_denver_gov": _extract_denvergov_search_fields,
 }
 
 
@@ -264,6 +283,38 @@ _TOOL_MAP_VIEWER_BUILDERS = {
 }
 
 
+def _denvergov_search_sources(output: dict) -> list[dict]:
+    """Build `sources` SSE entries from a search_denver_gov tool output —
+    one entry per Tavily hit. Each entry uses the page title as
+    `service_name` (the label the frontend renders) and the URL as both
+    `base_url` and `hub_url` (the frontend uses `hub_url` as the link).
+    Stamps `doc_type = "denvergov_search_result"` so the frontend can
+    distinguish Tavily-derived links from retrieval-driven catalog sources.
+    Dedup + skip-on-error handled by build_tool_sources."""
+    sources: list[dict] = []
+    for hit in output.get("results") or []:
+        url = hit.get("url")
+        if not url:
+            continue
+        title = (hit.get("title") or "").strip() or "denvergov.org page"
+        sources.append({
+            "service_name": title,
+            "base_url": url,
+            "hub_url": url,
+            "doc_type": DENVERGOV_SEARCH_DOC_TYPE,
+        })
+    return sources
+
+
+# Per-tool builders for the `sources` SSE event. Distinct from the
+# map_viewer builders: source URLs are citation-shaped (link + label
+# rendered as a list of references), not map-shaped. Use this when a
+# tool surfaces external pages that aren't maps.
+_TOOL_SOURCES_BUILDERS = {
+    "search_denver_gov": _denvergov_search_sources,
+}
+
+
 def build_tool_map_viewer_links(tool_name: str, output) -> list[dict]:
     """Build the `map_viewer` SSE payload from a tool's structured return.
 
@@ -300,6 +351,45 @@ def build_tool_map_viewer_links(tool_name: str, output) -> list[dict]:
         if len(capped) >= _TOOL_MAP_VIEWER_LINK_CAP:
             break
     return capped
+
+
+def build_tool_sources(tool_name: str, output) -> list[dict]:
+    """Build the `sources` SSE payload from a tool's structured return.
+
+    Mirrors `build_sources_payload` for the tool path. Per-tool dispatch via
+    `_TOOL_SOURCES_BUILDERS`; deduped on `(service_name, base_url, hub_url)`.
+    Returns [] when the tool didn't produce sources or its output isn't a dict.
+    """
+    builder = _TOOL_SOURCES_BUILDERS.get(tool_name)
+    if builder is None:
+        return []
+
+    if hasattr(output, "content"):
+        try:
+            content = output.content
+            if isinstance(content, str) and content.strip().startswith("{"):
+                content = json.loads(content)
+            output = content
+        except (ValueError, TypeError):
+            pass
+    if not isinstance(output, dict):
+        return []
+    if output.get("error"):
+        return []
+
+    seen: set[tuple] = set()
+    deduped: list[dict] = []
+    for entry in builder(output):
+        key = (
+            entry.get("service_name"),
+            entry.get("base_url"),
+            entry.get("hub_url"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(entry)
+    return deduped
 
 
 @app.get("/health")
@@ -386,6 +476,14 @@ async def query_endpoint(body: QueryBody):
                     tool_links = build_tool_map_viewer_links(tool_name, output)
                     if tool_links:
                         yield f"event: map_viewer\ndata: {json.dumps({'urls': tool_links})}\n\n"
+
+                    # Surface citation-shaped URLs (e.g. denvergov.org pages
+                    # from search_denver_gov) via the same sources event the
+                    # retrieval path emits — frontend renders these as a
+                    # references list, not a map panel.
+                    tool_sources = build_tool_sources(tool_name, output)
+                    if tool_sources:
+                        yield f"event: sources\ndata: {json.dumps({'sources': tool_sources})}\n\n"
 
                 # Scraper finished — emit scraped map_viewer_url if present
                 elif event_type == "on_chain_end" and node == "scraper":
