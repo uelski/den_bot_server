@@ -5,6 +5,7 @@ from app.main import (
     build_map_viewer_links,
     build_sources_payload,
     build_tool_map_viewer_links,
+    build_tool_sources,
 )
 
 
@@ -478,3 +479,191 @@ class TestBuildToolMapViewerLinks:
 
     def test_vehicles_no_match_returns_empty(self):
         assert build_tool_map_viewer_links(VEHICLES_TOOL, {"matched_route": None}) == []
+
+
+DENVERGOV_TOOL = "search_denver_gov"
+DENVERGOV_KEYS = {"ok", "error", "query", "result_count", "sample"}
+
+
+class TestSummarizeDenvergovSearch:
+    """The denvergov.org Tavily-backed search tool. Same fixed-keyset
+    discriminated-union convention as the other tools."""
+
+    def test_full_keyset_populated_on_success(self):
+        output = {
+            "query": "how do I pay a parking ticket",
+            "results": [
+                {
+                    "title": "Pay a parking ticket",
+                    "url": "https://www.denvergov.org/pay-ticket",
+                    "snippet": "Pay your Denver parking ticket online...",
+                    "score": 0.92,
+                },
+                {
+                    "title": "Parking enforcement",
+                    "url": "https://www.denvergov.org/parking-enforcement",
+                    "snippet": "Information about parking enforcement.",
+                    "score": 0.84,
+                },
+            ],
+        }
+        result = _summarize_tool_output(DENVERGOV_TOOL, output)
+        assert set(result.keys()) == DENVERGOV_KEYS
+        assert result["ok"] is True
+        assert result["error"] is None
+        assert result["query"] == "how do I pay a parking ticket"
+        assert result["result_count"] == 2
+        assert len(result["sample"]) == 2
+        assert result["sample"][0]["title"] == "Pay a parking ticket"
+        assert result["sample"][0]["url"].startswith("https://www.denvergov.org/")
+
+    def test_error_keeps_full_keyset_with_nulls(self):
+        result = _summarize_tool_output(DENVERGOV_TOOL, {"error": "Tavily down"})
+        assert set(result.keys()) == DENVERGOV_KEYS
+        assert result["ok"] is False
+        assert result["error"] == "Tavily down"
+        assert result["query"] is None
+        assert result["result_count"] is None
+        assert result["sample"] is None
+
+    def test_empty_results_render_empty_sample(self):
+        output = {"query": "nothing matches", "results": []}
+        result = _summarize_tool_output(DENVERGOV_TOOL, output)
+        assert result["ok"] is True
+        assert result["query"] == "nothing matches"
+        assert result["result_count"] == 0
+        assert result["sample"] == []
+
+    def test_sample_truncates_long_snippets(self):
+        output = {
+            "query": "q",
+            "results": [
+                {
+                    "title": "T",
+                    "url": "https://www.denvergov.org/t",
+                    "snippet": "x" * 500,
+                },
+            ],
+        }
+        result = _summarize_tool_output(DENVERGOV_TOOL, output)
+        # Sample snippet is capped at 200 chars by _extract_denvergov_search_fields,
+        # independent of the tool-level 300-char SNIPPET_MAX_CHARS cap.
+        assert len(result["sample"][0]["snippet"]) == 200
+
+    def test_sample_caps_at_two(self):
+        output = {
+            "query": "q",
+            "results": [
+                {
+                    "title": f"Title {i}",
+                    "url": f"https://www.denvergov.org/{i}",
+                    "snippet": f"Snippet {i}",
+                }
+                for i in range(5)
+            ],
+        }
+        result = _summarize_tool_output(DENVERGOV_TOOL, output)
+        assert result["result_count"] == 5
+        assert len(result["sample"]) == 2
+        assert result["sample"][0]["title"] == "Title 0"
+        assert result["sample"][1]["title"] == "Title 1"
+
+
+class TestBuildToolSourcesDenvergov:
+    """Tavily's URLs feed the `sources` SSE event (citation-shaped) rather
+    than the `map_viewer` panel — these aren't maps. Each hit becomes one
+    source entry with the page title as service_name (the label) and the
+    URL as both base_url and hub_url (frontend uses hub_url as the link)."""
+
+    def test_emits_one_source_per_result_with_titles_as_service_name(self):
+        output = {
+            "query": "q",
+            "results": [
+                {"title": "Pay a parking ticket", "url": "https://www.denvergov.org/pay-ticket", "snippet": ""},
+                {"title": "Parking enforcement", "url": "https://www.denvergov.org/parking-enforcement", "snippet": ""},
+            ],
+        }
+        sources = build_tool_sources(DENVERGOV_TOOL, output)
+        assert len(sources) == 2
+        assert sources[0] == {
+            "service_name": "Pay a parking ticket",
+            "base_url": "https://www.denvergov.org/pay-ticket",
+            "hub_url": "https://www.denvergov.org/pay-ticket",
+            "doc_type": "denvergov_search_result",
+        }
+        assert sources[1]["service_name"] == "Parking enforcement"
+
+    def test_every_entry_carries_doc_type_discriminator(self):
+        # The discriminator lets the frontend render Tavily-derived links
+        # differently from retrieval-driven catalog sources (which carry
+        # doc_types like denver_park, neighborhood_demographics, etc.).
+        output = {
+            "query": "q",
+            "results": [
+                {"title": f"Page {i}", "url": f"https://www.denvergov.org/p{i}", "snippet": ""}
+                for i in range(3)
+            ],
+        }
+        sources = build_tool_sources(DENVERGOV_TOOL, output)
+        assert len(sources) == 3
+        for entry in sources:
+            assert entry["doc_type"] == "denvergov_search_result"
+
+    def test_skips_when_error(self):
+        output = {
+            "query": "q",
+            "results": [
+                {"title": "T", "url": "https://www.denvergov.org/t", "snippet": ""},
+            ],
+            "error": "Tavily down",
+        }
+        assert build_tool_sources(DENVERGOV_TOOL, output) == []
+
+    def test_skips_hits_missing_url(self):
+        output = {
+            "query": "q",
+            "results": [
+                {"title": "Has URL", "url": "https://www.denvergov.org/a", "snippet": ""},
+                {"title": "Missing URL", "url": "", "snippet": ""},
+            ],
+        }
+        sources = build_tool_sources(DENVERGOV_TOOL, output)
+        assert len(sources) == 1
+        assert sources[0]["hub_url"] == "https://www.denvergov.org/a"
+
+    def test_dedupes_by_service_name_base_url_hub_url(self):
+        same = {"title": "T", "url": "https://www.denvergov.org/x", "snippet": ""}
+        output = {"query": "q", "results": [same, same, same]}
+        assert len(build_tool_sources(DENVERGOV_TOOL, output)) == 1
+
+    def test_falls_back_to_default_label_when_title_empty(self):
+        output = {
+            "query": "q",
+            "results": [
+                {"title": "", "url": "https://www.denvergov.org/x", "snippet": ""},
+                {"title": "   ", "url": "https://www.denvergov.org/y", "snippet": ""},
+            ],
+        }
+        sources = build_tool_sources(DENVERGOV_TOOL, output)
+        # Both fall back to the default label, but distinct URLs keep them
+        # as separate entries.
+        assert sources[0]["service_name"] == "denvergov.org page"
+        assert sources[1]["service_name"] == "denvergov.org page"
+        assert sources[0]["hub_url"] != sources[1]["hub_url"]
+
+    def test_no_results_returns_empty(self):
+        assert build_tool_sources(DENVERGOV_TOOL, {"query": "q", "results": []}) == []
+
+    def test_unknown_tool_returns_empty(self):
+        assert build_tool_sources("not_a_real_tool", {"results": []}) == []
+
+    def test_search_denver_gov_no_longer_emits_map_viewer_links(self):
+        # Regression guard: this tool used to emit map_viewer entries, but
+        # was moved to sources because the URLs aren't maps.
+        output = {
+            "query": "q",
+            "results": [
+                {"title": "T", "url": "https://www.denvergov.org/t", "snippet": ""},
+            ],
+        }
+        assert build_tool_map_viewer_links(DENVERGOV_TOOL, output) == []

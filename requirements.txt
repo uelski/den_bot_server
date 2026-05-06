@@ -15,6 +15,7 @@ sse-starlette              # streaming responses from FastAPI
 shapely                    # polygon centroid computation (compute_neighborhood_centroids.py)
 pandas                     # GTFS file joins (scripts/ingest_rtd_gtfs.py only — not loaded at runtime)
 gtfs-realtime-bindings     # protobuf parser for app/tools/rtd_alerts.py
+tavily-python>=0.5.0       # AsyncTavilyClient backing the search_denver_gov tool
 dotenv
 fastembed
 
