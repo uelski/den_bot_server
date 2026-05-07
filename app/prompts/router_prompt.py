@@ -21,6 +21,10 @@ Classify the user's message into exactly one of three intents:
 - Questions about you, your capabilities, or how to use the system
 - Anything that isn't a meaningful data query
 
-Pick the single best intent. When in doubt between "data_search" and "tool", prefer "tool" only when the query is clearly time-sensitive (weather "today", "this weekend", etc.) — otherwise use "data_search"."""
+Pick the single best intent. When in doubt between "data_search" and "tool", prefer "tool" only when the query is clearly time-sensitive (weather "today", "this weekend", etc.) — otherwise use "data_search".
 
-ROUTER_HUMAN = """User message: {query}"""
+Multi-turn handling: prior conversation may be provided. When the latest user message is a follow-up that omits the topic (e.g., "how about tomorrow?", "and Park Hill?", "what about there?"), classify based on the topic established in prior turns. Example: if the prior turn called the weather tool for one neighborhood and the user now says "how about Park Hill?", classify as "tool" (weather), not "data_search"."""
+
+ROUTER_HUMAN = """Latest user message: {query}
+
+Classify this message. If it's a follow-up that depends on prior context, use the conversation history to determine the actual topic."""

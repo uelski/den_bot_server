@@ -4,6 +4,7 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
+from app.graph.nodes.condenser import condenser
 from app.graph.nodes.generator import generator
 from app.graph.nodes.grader import grader
 from app.graph.nodes.intent_router import intent_router
@@ -24,7 +25,7 @@ def route_after_router(state: AgentState) -> str:
     if state.get("needs_tool"):
         return "tool_agent"
     if state["requires_rag"]:
-        return "retriever"
+        return "condenser"
     return "generate"
 
 
@@ -54,6 +55,7 @@ def build_graph(checkpointer: Any | None = None):
 
     # Register nodes
     builder.add_node("main_router", main_router)
+    builder.add_node("condenser", condenser)
     builder.add_node("retriever", retriever)
     builder.add_node("grader", grader)
     builder.add_node("intent_router", intent_router)
@@ -68,11 +70,12 @@ def build_graph(checkpointer: Any | None = None):
         "main_router",
         route_after_router,
         {
-            "retriever": "retriever",
+            "condenser": "condenser",
             "tool_agent": "tool_agent",
             "generate": "generate",
         },
     )
+    builder.add_edge("condenser", "retriever")
     builder.add_edge("retriever", "grader")
     builder.add_edge("tool_agent", "generate")
 

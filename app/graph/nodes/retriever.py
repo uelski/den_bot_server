@@ -30,7 +30,13 @@ def _get_vector_store() -> QdrantVectorStore:
 
 
 def retriever(state: AgentState) -> dict:
-    """Run hybrid search against Qdrant; return top-k documents."""
+    """Run hybrid search against Qdrant; return top-k documents.
+
+    Prefers `search_query` (history-aware standalone form set by the
+    condenser, or rewriter on retry) and falls back to the literal
+    `query` for safety.
+    """
     store = _get_vector_store()
-    docs = store.similarity_search(state["query"], k=TOP_K)
+    search_q = state.get("search_query") or state["query"]
+    docs = store.similarity_search(search_q, k=TOP_K)
     return {"retrieved_docs": docs}

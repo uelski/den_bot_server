@@ -21,6 +21,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+from app.graph.memory import truncate_history
 from app.graph.state import AgentState
 from app.tools.registry import AGENT_TOOLS
 
@@ -45,11 +46,24 @@ async def _invoke_tool(tool_name: str, args: dict) -> Any:
 
 
 async def tool_agent(state: AgentState) -> dict:
-    """Run the tool-calling loop and collect results into state.tool_results."""
+    """Run the tool-calling loop and collect results into state.tool_results.
+
+    Multi-turn: prepends the truncated conversation history before the
+    current HumanMessage so the tool-calling LLM can resolve references
+    when picking tool args (e.g. "and tomorrow?" pairs with the prior
+    weather location). The full history lives in Redis; truncation is
+    just a token-budget control — same pattern as the generator.
+    """
     llm = ChatGoogleGenerativeAI(model=MODEL, temperature=0).bind_tools(AGENT_TOOLS)
 
-    messages: list = [HumanMessage(content=state["query"])]
+    history = truncate_history(state.get("messages") or [])
+    messages: list = [*history, HumanMessage(content=state["query"])]
     collected: list[dict] = []
+
+    logger.info(
+        "tool_agent: query=%r, history_count=%d",
+        state["query"][:80], len(history),
+    )
 
     for iteration in range(MAX_ITERATIONS):
         response = await llm.ainvoke(messages)

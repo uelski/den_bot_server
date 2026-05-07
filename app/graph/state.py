@@ -9,8 +9,15 @@ class AgentState(TypedDict):
     # Conversation history — add_messages reducer appends rather than overwrites
     messages: Annotated[list, add_messages]
 
-    # Current user query (may be rewritten on retry)
+    # Current user query — kept stable across the turn so the generator
+    # always answers the literal question the user asked.
     query: str
+
+    # Throwaway, condensed/rewritten form of `query` used ONLY for Qdrant
+    # retrieval. Set by the condenser (history-aware standalone-query
+    # rewrite) and overwritten by the rewriter on retry. Never persisted
+    # to messages — see CLAUDE-style note in app/graph/nodes/condenser.py.
+    search_query: str | None
 
     # Gate: True when query needs RAG retrieval, False for general conversation
     requires_rag: bool

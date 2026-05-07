@@ -12,7 +12,17 @@ MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 def rewriter(state: AgentState) -> dict:
-    """Rewrite the query to improve retrieval, then increment retry_count."""
+    """Rewrite the query to improve retrieval, then increment retry_count.
+
+    Writes to `search_query` rather than `query` so the user's literal
+    question stays stable for the generator. The retriever reads
+    `search_query` first, so the next retrieval pass picks up the
+    rewrite automatically.
+
+    Uses the current `search_query` (set by the condenser) as the
+    starting point if available, so we're rewriting the already
+    history-resolved form rather than the bare follow-up.
+    """
     llm = ChatGoogleGenerativeAI(model=MODEL, temperature=0.3)
 
     prompt = ChatPromptTemplate.from_messages(
@@ -20,10 +30,11 @@ def rewriter(state: AgentState) -> dict:
     )
     chain = prompt | llm
 
-    result = chain.invoke({"query": state["query"]})
+    base_query = state.get("search_query") or state["query"]
+    result = chain.invoke({"query": base_query})
     rewritten = result.content.strip()
 
     return {
-        "query": rewritten,
+        "search_query": rewritten,
         "retry_count": state["retry_count"] + 1,
     }
