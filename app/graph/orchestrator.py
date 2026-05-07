@@ -1,7 +1,10 @@
 """orchestrator.py — StateGraph assembly and edge wiring."""
 
+from typing import Any
+
 from langgraph.graph import END, START, StateGraph
 
+from app.graph.nodes.condenser import condenser
 from app.graph.nodes.generator import generator
 from app.graph.nodes.grader import grader
 from app.graph.nodes.intent_router import intent_router
@@ -22,7 +25,7 @@ def route_after_router(state: AgentState) -> str:
     if state.get("needs_tool"):
         return "tool_agent"
     if state["requires_rag"]:
-        return "retriever"
+        return "condenser"
     return "generate"
 
 
@@ -44,11 +47,15 @@ def route_after_intent(state: AgentState) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def build_graph():
+def build_graph(checkpointer: Any | None = None):
+    """Compile the StateGraph. Pass `checkpointer=` to enable multi-turn
+    memory (typically an AsyncRedisSaver from app/graph/memory.py); leave
+    None for stateless single-turn (used by tests and the no-Redis fallback)."""
     builder = StateGraph(AgentState)
 
     # Register nodes
     builder.add_node("main_router", main_router)
+    builder.add_node("condenser", condenser)
     builder.add_node("retriever", retriever)
     builder.add_node("grader", grader)
     builder.add_node("intent_router", intent_router)
@@ -63,11 +70,12 @@ def build_graph():
         "main_router",
         route_after_router,
         {
-            "retriever": "retriever",
+            "condenser": "condenser",
             "tool_agent": "tool_agent",
             "generate": "generate",
         },
     )
+    builder.add_edge("condenser", "retriever")
     builder.add_edge("retriever", "grader")
     builder.add_edge("tool_agent", "generate")
 
@@ -96,7 +104,10 @@ def build_graph():
     builder.add_edge("generate", END)
     builder.add_edge("scraper", END)
 
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)
 
 
+# Module-level stateless graph — used by tests and as a fallback when
+# REDIS_URL is unset. The memory-enabled graph is compiled at FastAPI
+# lifespan startup in app/main.py and stored on app.state.
 graph = build_graph()

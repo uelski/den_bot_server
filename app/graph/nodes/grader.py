@@ -23,7 +23,13 @@ def _format_docs(docs) -> str:
 
 
 def grader(state: AgentState) -> dict:
-    """Determine if retrieved docs are relevant to the query."""
+    """Determine if retrieved docs are relevant to the query.
+
+    Grades against `search_query` (the history-resolved standalone form
+    used for retrieval) so a bare follow-up like "how about Five Points?"
+    isn't compared against docs that were correctly fetched using the
+    condensed "parks in Five Points neighborhood Denver".
+    """
     llm = ChatGoogleGenerativeAI(model=MODEL, temperature=0)
     structured_llm = llm.with_structured_output(GraderOutput)
 
@@ -32,9 +38,10 @@ def grader(state: AgentState) -> dict:
     )
     chain = prompt | structured_llm
 
+    grade_query = state.get("search_query") or state["query"]
     result: GraderOutput = chain.invoke(
         {
-            "query": state["query"],
+            "query": grade_query,
             "documents": _format_docs(state["retrieved_docs"]),
         }
     )

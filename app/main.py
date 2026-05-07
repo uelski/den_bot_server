@@ -3,21 +3,57 @@
 import json
 import logging
 import os
+import uuid
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.graph.orchestrator import graph
+# Route app-level INFO logs to stdout. uvicorn configures its own loggers
+# (uvicorn / uvicorn.error / uvicorn.access) but doesn't touch root or
+# app loggers, so without this our lifespan / startup messages are
+# silently dropped at WARNING-level filtering. basicConfig is a no-op
+# if a handler is already attached, so it's safe under reload too.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
+from app.graph.memory import build_checkpointer
+from app.graph.orchestrator import build_graph, graph as stateless_graph
 from app.tools.denvergov_search import DOC_TYPE as DENVERGOV_SEARCH_DOC_TYPE
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Denver Open Data RAG")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """FastAPI startup/shutdown hook. Builds the AsyncRedisSaver once
+    (when REDIS_URL is set) and compiles a memory-enabled graph backed by
+    it. Both are stored on app.state so request handlers can reach them
+    without re-creating per-request. When REDIS_URL is unset we fall
+    through to the stateless graph imported at module load — endpoints
+    work fine, just without cross-turn memory."""
+    checkpointer = await build_checkpointer()
+    if checkpointer is not None:
+        app.state.graph = build_graph(checkpointer=checkpointer)
+        app.state.checkpointer = checkpointer
+        app.state.memory_enabled = True
+        logger.info("Compiled memory-enabled graph with AsyncRedisSaver")
+    else:
+        app.state.graph = stateless_graph
+        app.state.checkpointer = None
+        app.state.memory_enabled = False
+        logger.info("Compiled stateless graph (no REDIS_URL set)")
+    yield
+
+
+app = FastAPI(title="Denver Open Data RAG", lifespan=lifespan)
 
 origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
 
@@ -31,6 +67,11 @@ app.add_middleware(
 
 class QueryBody(BaseModel):
     query: str
+    # Optional client-supplied thread identifier. When present and a Redis
+    # checkpointer is configured, prior turns under this thread_id are
+    # loaded and the new turn is appended. When absent (or no checkpointer),
+    # the request runs single-turn with a throwaway thread id.
+    thread_id: str | None = None
 
 
 def build_sources_payload(docs) -> list[dict]:
@@ -398,10 +439,15 @@ async def health():
 
 
 @app.post("/query")
-async def query_endpoint(body: QueryBody):
+async def query_endpoint(body: QueryBody, request: Request):
+    # Per-turn fields reset to defaults — they overwrite whatever the
+    # checkpointer loaded from prior turns. Note: `messages` is intentionally
+    # OMITTED from initial_state. With the add_messages reducer, passing []
+    # is technically a no-op merge, but excluding the key entirely is the
+    # safer pattern — it lets the loaded checkpoint state's messages flow
+    # through untouched, with no chance of an accidental reset.
     initial_state = {
         "query": body.query,
-        "messages": [],
         "requires_rag": True,
         "retrieved_docs": [],
         "docs_relevant": None,
@@ -413,12 +459,21 @@ async def query_endpoint(body: QueryBody):
         "map_viewer_urls": [],
     }
 
+    # When the client doesn't send a thread_id, generate a throwaway one
+    # so the LangGraph checkpointer (when configured) has a key to write
+    # under. Throwaway threads fall out of Redis on TTL expiry.
+    thread_id = body.thread_id or str(uuid.uuid4())
+    graph = request.app.state.graph
+
     # LangSmith tags (no-op when tracing disabled): make runs searchable by
     # route (api-query) and include a short preview of the query in the run name.
+    # `configurable.thread_id` keys the LangGraph checkpointer; required even
+    # when no checkpointer is attached (LangGraph ignores it cleanly in that case).
     query_preview = body.query[:40].replace("\n", " ")
     run_config = {
         "run_name": f"/query: {query_preview}",
         "tags": ["api-query"],
+        "configurable": {"thread_id": thread_id},
     }
 
     async def event_stream():
