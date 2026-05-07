@@ -24,6 +24,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
+from app.feedback import router as feedback_router
 from app.graph.memory import build_checkpointer
 from app.graph.orchestrator import build_graph, graph as stateless_graph
 from app.tools.denvergov_search import DOC_TYPE as DENVERGOV_SEARCH_DOC_TYPE
@@ -63,6 +64,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(feedback_router)
 
 
 class QueryBody(BaseModel):
