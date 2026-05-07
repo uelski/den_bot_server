@@ -48,6 +48,9 @@ State → Retrieve → Grade → [Generate | Scrape → Generate]
 - QDRANT_COLLECTION_NAME (default: denver_gis_catalog)
 - REDIS_URL (default: redis://localhost:6379) — backs the LangGraph checkpointer for multi-turn memory; unset to run single-turn
 - TAVILY_API_KEY — required for the search_denver_gov agent tool
+- RESEND_API_KEY — required for POST /feedback to deliver mail (without it the endpoint 503s)
+- FEEDBACK_TO_EMAIL — destination address for feedback emails (your inbox)
+- FEEDBACK_FROM_EMAIL — sender address. Default `onboarding@resend.dev` works ONLY for delivery to the email registered on the Resend account. Override once a sending domain is verified.
 
 ## Dev Notes
 - Local infra: `docker compose up -d` (brings up Qdrant + Redis with persistent named volumes; see `docker-compose.yml`)
