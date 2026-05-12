@@ -64,20 +64,17 @@ Today the graph is stateless per request — each `/query` starts from scratch. 
 
 **Effort**: ~half a day for in-process memory end-to-end including frontend changes.
 
-## 2. Deployment
+## 2. Deployment — active focus
 
-`deployment.md` already sketches a GCP Cloud Run + Qdrant Cloud path. This item is executing on it.
+`deployment.md` already sketches the GCP Cloud Run + Qdrant Cloud path. Picking this up after the frontend deploy at bluecypher.ai. CORS already updated in `.env` / `.env.example` to allow the apex + www origins.
 
 **Tasks**:
-- Build + push the FastAPI container to Artifact Registry.
-- Provision Qdrant Cloud (or self-host on GKE — decision point).
-- Re-run `scripts/ingest.py` + `scripts/ingest_neighborhoods.py` against the prod Qdrant instance.
-- Cloud Run service: set `QDRANT_URL`, `QDRANT_API_KEY`, `GEMINI_API_KEY`, `LANGCHAIN_*` as secrets.
-- Tighten `ALLOWED_ORIGINS` from the local dev values to the real frontend host.
+- **Managed Qdrant (Qdrant Cloud)** — decision locked, not GKE self-host. Provision the cluster, then migrate data from local Docker Qdrant. Migration path: re-run the ingest scripts against the prod URL/API key — `scripts/ingest.py`, `scripts/ingest_neighborhoods.py`, and every POI / aggregate ingest under `scripts/ingest_denver_*` and `scripts/ingest_rtd_gtfs.py`. Alternative if any local state isn't reproducible from scripts: `qdrant-client` snapshot/restore.
+- **Redis Memorystore on GCP** — backs the LangGraph checkpointer (`REDIS_URL`). Provision the instance, attach Cloud Run via a VPC connector. The checkpointer code doesn't care about backing store, just the connection string.
+- **Cloud Run for the FastAPI server** — build + push container to Artifact Registry. Set as Cloud Run secrets: `GEMINI_API_KEY`, `QDRANT_URL`, `QDRANT_API_KEY`, `REDIS_URL`, `RESEND_API_KEY`, `FEEDBACK_TO_EMAIL`, `FEEDBACK_FROM_EMAIL`, `LANGCHAIN_*`, `TAVILY_API_KEY`, `ALLOWED_ORIGINS`.
+- Tighten `ALLOWED_ORIGINS` for prod (drop the localhost entries from the deployed value).
 - Add a lightweight auth layer if the frontend isn't going to be our own trusted deployment.
 - Rate limiting (token bucket on `/query`) — Gemini calls aren't free.
-
-**Decision**: Qdrant Cloud vs self-hosted GKE. Qdrant Cloud is faster to ship; GKE is cheaper at scale and keeps data in our tenancy.
 
 **Effort**: 1-2 days depending on GCP familiarity.
 
