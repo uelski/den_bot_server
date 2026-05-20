@@ -68,13 +68,22 @@ Today the graph is stateless per request — each `/query` starts from scratch. 
 
 `deployment.md` already sketches the GCP Cloud Run + Qdrant Cloud path. Picking this up after the frontend deploy at bluecypher.ai. CORS already updated in `.env` / `.env.example` to allow the apex + www origins.
 
-**Tasks**:
-- **Managed Qdrant (Qdrant Cloud)** — decision locked, not GKE self-host. Provision the cluster, then migrate data from local Docker Qdrant. Migration path: re-run the ingest scripts against the prod URL/API key — `scripts/ingest.py`, `scripts/ingest_neighborhoods.py`, and every POI / aggregate ingest under `scripts/ingest_denver_*` and `scripts/ingest_rtd_gtfs.py`. Alternative if any local state isn't reproducible from scripts: `qdrant-client` snapshot/restore.
+### Qdrant Cloud — done (2026-05-19)
+Migrated via snapshot/restore (bit-for-bit) into `us-east4` cluster. Phase 5 parity test confirmed payloads byte-identical and top-10 retrieval overlap 100% across 15 representative queries. App-side `.env` flipped to the managed URL + API key; local Docker Qdrant kept running through ~2026-05-26 as a fallback.
+- One payload index added on `metadata.neighborhood_name` (keyword) on both clusters — required by Qdrant Cloud's `strict_mode_config.unindexed_filtering_retrieve=false`. Filters live in `app/tools/weather.py` and `app/tools/rtd_arrivals.py`.
+- Snapshot file lives under `snapshots/` (gitignored); safe to delete after the fallback window closes.
+
+### Remaining tasks
 - **Redis Memorystore on GCP** — backs the LangGraph checkpointer (`REDIS_URL`). Provision the instance, attach Cloud Run via a VPC connector. The checkpointer code doesn't care about backing store, just the connection string.
-- **Cloud Run for the FastAPI server** — build + push container to Artifact Registry. Set as Cloud Run secrets: `GEMINI_API_KEY`, `QDRANT_URL`, `QDRANT_API_KEY`, `REDIS_URL`, `RESEND_API_KEY`, `FEEDBACK_TO_EMAIL`, `FEEDBACK_FROM_EMAIL`, `LANGCHAIN_*`, `TAVILY_API_KEY`, `ALLOWED_ORIGINS`.
+- **Cloud Run for the FastAPI server** — build + push container to Artifact Registry. Set as Cloud Run secrets: `GEMINI_API_KEY`, `QDRANT_URL`, `QDRANT_API_KEY`, `REDIS_URL`, `RESEND_API_KEY`, `FEEDBACK_TO_EMAIL`, `FEEDBACK_FROM_EMAIL`, `LANGCHAIN_*`, `TAVILY_API_KEY`, `ALLOWED_ORIGINS`. Match Cloud Run region to Qdrant Cloud's `us-east4`.
 - Tighten `ALLOWED_ORIGINS` for prod (drop the localhost entries from the deployed value).
 - Add a lightweight auth layer if the frontend isn't going to be our own trusted deployment.
 - Rate limiting (token bucket on `/query`) — Gemini calls aren't free.
+
+### Follow-ups surfaced during Qdrant migration (non-blocking)
+- `scripts/ingest.py` should `create_payload_index('metadata.neighborhood_name', 'keyword')` after collection creation, so a future re-ingest doesn't drop the index that strict mode requires.
+- CLAUDE.md says embedding model is `text-embedding-004` (768d). Actual is `gemini-embedding-001` (3072d) — update the doc.
+- `scripts/viewer_upsert.py` hardcodes `http://localhost:6333` with no `api_key`. Local-only utility today; needs the standard env-var pattern if ever pointed at prod.
 
 **Effort**: 1-2 days depending on GCP familiarity.
 

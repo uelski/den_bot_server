@@ -1,0 +1,88 @@
+Phase 1 — Pre-flight Qdrant inventory
+Captured: 2026-05-19 against local Qdrant at http://localhost:6333
+
+This file is the source of truth for "what success looks like" after the
+Qdrant Cloud snapshot restore. Every value here must match on the managed
+instance before Phase 6 cutover.
+
+================================================================
+Collections
+================================================================
+  denver_gis_catalog  (only collection)
+
+================================================================
+Collection spec: denver_gis_catalog
+================================================================
+Status:                 green
+Segments:               2
+Points (exact):         9781
+Indexed vectors:        18795
+Payload schema:         {} (no payload indexes — nothing extra to recreate)
+
+Dense vector (unnamed default ""):
+  size:                 3072
+  distance:             Cosine
+
+  NOTE: 3072 dims => embedding model is gemini-embedding-001, not
+  text-embedding-004 as CLAUDE.md claims. CLAUDE.md should be updated.
+
+Sparse vector:
+  name:                 langchain-sparse  (BM25)
+
+HNSW:
+  m:                    16
+  ef_construct:         100
+  full_scan_threshold:  10000
+  on_disk:              false
+
+Optimizer:
+  deleted_threshold:    0.2
+  vacuum_min_vector:    1000
+  indexing_threshold:   10000
+  flush_interval_sec:   5
+
+on_disk_payload:        true
+shard_number:           1
+replication_factor:     1
+
+================================================================
+Per-doc_type counts  (path: payload.metadata.doc_type)
+================================================================
+doc_type                          count
+-----------------------------------------
+rtd_stop                          7382
+(null — original catalog)         1018
+neighborhood_demographics          390
+denver_park                        374
+denver_school                      278   (232 public + 46 non-public)
+rtd_route                          125
+neighborhood_traffic_summary        78
+neighborhood_crime_summary          78
+denver_rec_center                   31
+denver_library                      27
+-----------------------------------------
+TOTAL                             9781
+
+================================================================
+Acceptance criteria post-restore
+================================================================
+1. GET /collections returns ["denver_gis_catalog"]
+2. GET /collections/denver_gis_catalog spec matches:
+   - points_count == 9781
+   - dense vector size == 3072, distance == Cosine
+   - sparse vector "langchain-sparse" present
+3. Per-doc_type counts (scroll + aggregate on metadata.doc_type) match exactly
+4. Phase 5 parity test: top-3 identical, top-10 >=90% overlap
+   across 10-15 representative queries
+5. Spot-check 5 random point IDs — payloads byte-identical
+
+================================================================
+Notes for next phases
+================================================================
+- Payload schema is empty: doc_type is NOT indexed (facet endpoint
+  failed with "No appropriate index for faceting"). If we want filtered
+  queries by doc_type in prod, create an index after restore — but
+  that is an enhancement, not a migration requirement.
+- Tier consideration for Phase 2: dataset is small (9,781 points,
+  3072-dim dense + sparse). Snapshot will be on the order of low
+  hundreds of MB. Verify chosen tier supports snapshot upload.
