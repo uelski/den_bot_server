@@ -9,6 +9,7 @@
 .env.production
 notes.txt
 qdrant_storage/
+snapshots/
 .DS_Store
 __pycache__/
 *.py[cod]
