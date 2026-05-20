@@ -1,0 +1,53 @@
+# Keep the Cloud Run image small — everything below is dev/build/data and not
+# needed at runtime. The Dockerfile only COPY's requirements.txt and app/.
+
+# VCS / IDE
+.git
+.gitignore
+.github
+.vscode
+.idea
+.DS_Store
+
+# Python
+.den_venv
+__pycache__
+*.py[cod]
+*.pyo
+*.egg-info
+
+# Local secrets / config
+.env
+.env.local
+.env.production
+.env.development
+.env.test
+.env.*.local
+
+# Tests
+tests
+pytest.ini
+
+# Migration + ops artifacts
+snapshots
+phase1_inventory.txt
+qdrant_storage
+
+# Local Docker
+docker-compose.yml
+
+# Docs / planning (live in repo, not in runtime image)
+*.md
+graph.mmd
+graph.png
+notes.txt
+
+# Data files — ingest-time only; runtime reads from Qdrant
+data
+*.geojson
+*.csv
+*.zip
+ODC_*
+
+# One-off ingest + utility scripts; not invoked from the app at runtime
+scripts
