@@ -1,6 +1,11 @@
 # Cloud Build pipeline — triggered on push to main.
 # Steps: build container -> push to Artifact Registry -> deploy to Cloud Run.
 #
+# Redis (LangGraph checkpointer) runs on Upstash, NOT Memorystore.
+# langgraph-checkpoint-redis requires RedisJSON + RediSearch modules, which
+# Memorystore Basic/Standard does not provide. Upstash supports both, with a
+# public TLS endpoint — so no VPC connector is needed.
+#
 # Resolved variables:
 #   $PROJECT_ID    = blue-cypher              (Cloud Build built-in)
 #   $COMMIT_SHA    = git commit SHA           (Cloud Build built-in)
@@ -8,14 +13,12 @@
 #   $_REPO         = den-bot                  (Artifact Registry repo)
 #   $_IMAGE        = den-bot-server           (image name)
 #   $_SERVICE      = den-bot-server           (Cloud Run service)
-#   $_VPC_CONN     = den-bot-connector        (Serverless VPC Access Connector)
 
 substitutions:
   _REGION: us-east4
   _REPO: den-bot
   _IMAGE: den-bot-server
   _SERVICE: den-bot-server
-  _VPC_CONN: den-bot-connector
 
 steps:
   - id: build
@@ -46,10 +49,6 @@ steps:
       - --region=${_REGION}
       - --platform=managed
       - --allow-unauthenticated
-      - --vpc-connector=${_VPC_CONN}
-      # Only route private-IP traffic (Memorystore) through the VPC; public
-      # APIs (Gemini, Qdrant Cloud, RTD feeds, Tavily, Resend) go direct.
-      - --vpc-egress=private-ranges-only
       - --timeout=600s
       - --memory=1Gi
       - --cpu=1

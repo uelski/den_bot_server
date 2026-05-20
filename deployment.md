@@ -10,18 +10,19 @@ GitHub (main push)
             └── builds image → Artifact Registry (us-east4)
                        └── deploys → Cloud Run service "den-bot-server"
                                           │
-                                          ├── public: Gemini, Qdrant Cloud, RTD feeds, Tavily, Resend
-                                          └── private (via VPC connector): Memorystore Redis
+                                          └── public TLS: Gemini, Qdrant Cloud, Upstash Redis,
+                                                          RTD feeds, Tavily, Resend
                                           
                                   Secret Manager: GEMINI_API_KEY, QDRANT_*, REDIS_URL, RESEND_*, LANGCHAIN_*, TAVILY_API_KEY
 ```
+
+> **Why no VPC / Memorystore?** `langgraph-checkpoint-redis` requires the RedisJSON + RediSearch modules. Memorystore Basic/Standard ships vanilla OSS Redis with no modules, so the container can't initialize the checkpointer. We use **Upstash Redis** instead — public TLS endpoint, modules included, no VPC needed.
 
 | Resource | Name | Region |
 |---|---|---|
 | Artifact Registry repo | `den-bot` | us-east4 |
 | Cloud Run service | `den-bot-server` | us-east4 |
-| VPC connector | `den-bot-connector` | us-east4 |
-| Memorystore Redis | `den-bot-redis` (Basic, 1 GB) | us-east4 |
+| Upstash Redis database | `den-bot-redis` | us-east-1 (Virginia, closest to us-east4) |
 | Build trigger | `den-bot-server-main` | global |
 
 ---
@@ -54,14 +55,15 @@ Console → **IAM & Admin** → **IAM**. If the Cloud Build SA isn't listed, cli
 - **Secret Manager Secret Accessor** (`roles/secretmanager.secretAccessor`) — read secrets during validation (Cloud Run does this on the runtime SA, but Cloud Build inspects them at deploy)
 - **Logs Writer** (`roles/logging.logWriter`) — required because cloudbuild.yaml uses `options.logging: CLOUD_LOGGING_ONLY`
 
-### A.3 Grant Cloud Run runtime SA the secret + VPC permissions
+### A.3 Grant Cloud Run runtime SA secret-read permission
 
 The Cloud Run **runtime** SA defaults to the Compute Engine default SA: `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`. Grant it:
 
 - **Secret Manager Secret Accessor** (`roles/secretmanager.secretAccessor`) — read secrets at container startup
-- **Serverless VPC Access User** (`roles/vpcaccess.user`) — route through the VPC connector
 
-You can grant these on individual secrets in Phase D for tighter scope, but a project-level grant is simpler. Choose either.
+You can grant this on individual secrets in Phase D for tighter scope, but a project-level grant is simpler. Choose either.
+
+> If you also granted `roles/vpcaccess.user` based on an earlier version of this runbook (when we used Memorystore via a VPC connector), it's harmless to leave but can be removed — we no longer use a VPC.
 
 ---
 
@@ -80,64 +82,46 @@ Done. The image will land at `us-east4-docker.pkg.dev/blue-cypher/den-bot/den-bo
 
 ---
 
-## Phase C — VPC + Memorystore Redis
+## Phase C — Upstash Redis
 
-Memorystore Basic instances only expose **private IPs**, so Cloud Run must reach them via a Serverless VPC Access Connector.
+`langgraph-checkpoint-redis` requires RedisJSON + RediSearch modules (the same set the local `redis/redis-stack-server` image provides). Upstash supports both modules on every tier, exposes a public TLS endpoint, and has a free tier that covers hobby traffic.
 
-### C.1 Reserve a private services access range (one-time per VPC)
+### C.1 Provision the database
 
-Console → **VPC network** → **VPC networks** → click **`default`**.
+1. Sign up / log in at **https://upstash.com**
+2. **Redis** → **Create Database**
+3. Settings:
+   - Name: **`den-bot-redis`**
+   - Type: **Regional** (Global is overkill and pricier)
+   - Region: **us-east-1 (Virginia)** — closest Upstash region to GCP us-east4
+   - Eviction: **Off** (we want checkpoints to persist; we'll rely on TTL set by `MEMORY_TTL_MINUTES`)
+   - TLS: **Enabled** (default)
+4. **Create**
 
-- Tab: **Private services connection** → **Allocated IP ranges for services**
-- **+ Allocate IP Range**
-  - Name: **`google-managed-services-default`**
-  - Description: "Range for Memorystore / private services"
-  - **Automatic allocation**, **/16**
-  - Click **Allocate**
+### C.2 Capture the connection string
 
-Then tab: **Private services connection** → **Connections** → **+ Create Connection**.
-- Service producer: **Google Cloud Platform**
-- Allocated ranges: select **`google-managed-services-default`**
-- **Connect**
+Open the database → **Details** tab → **Endpoint** section.
 
-This takes 1–2 minutes.
-
-### C.2 Create Serverless VPC Access Connector
-
-Console → **VPC network** → **Serverless VPC access** → **+ Create Connector**.
-
-- Name: **`den-bot-connector`**
-- Region: **us-east4**
-- Network: **`default`**
-- Subnet: **Custom IP range** → **`10.8.0.0/28`** (any unused /28 in the VPC; verify in the **VPC networks** subnet list)
-- Minimum instances: **2** (default)
-- Maximum instances: **3** (default; can raise later)
-- Instance type: **f1-micro** (cheapest; fine for our traffic)
-- Click **Create**
-
-Wait until status is "Ready" (~2 minutes).
-
-### C.3 Create Memorystore Redis instance
-
-Console → **Memorystore** → **Redis** → **+ Create Instance**.
-
-- Instance ID: **`den-bot-redis`**
-- Tier: **Basic** (no replication)
-- Region: **us-east4**, Zone: **Any (let Google choose)**
-- Capacity: **1 GB**
-- Version: **Redis 7.x** (latest available)
-- Network: **`default`**
-- Connection mode: **Private service access** (uses the connection we made in C.1)
-- AUTH: **Disabled** (Memorystore Basic in a private VPC; no internet exposure). If you'd rather have AUTH, enable it and the REDIS_URL becomes `redis://default:<AUTH_STRING>@<IP>:6379`.
-- Click **Create**
-
-Provisioning takes ~5 minutes. Once ready, **click into the instance** and capture the **Primary endpoint** (something like `10.x.x.3:6379`). This becomes the value of the `REDIS_URL` secret in Phase D: 10.118.0.3
+You want the **`redis://` connection string** that includes the password. It looks like:
 
 ```
-redis://10.118.0.3:6379
+rediss://default:<long-random-password>@<region>-<id>.upstash.io:6379
 ```
 
-> **Note**: `langgraph-checkpoint-redis` uses RediSearch under the hood, which Memorystore Redis 7.x supports natively. If you see `FT.*` command errors at runtime, double-check the version.
+> **Use `rediss://` (two s's, with TLS), not `redis://`.** Upstash requires TLS. `redis-py` reads the scheme and configures the connection accordingly.
+
+This value goes into the `REDIS_URL` secret in Phase D.
+
+### C.3 Quick smoke test (optional)
+
+From your laptop, with `redis-cli` installed (`brew install redis`):
+
+```bash
+redis-cli -u "rediss://default:<password>@<region>-<id>.upstash.io:6379" PING
+# → PONG
+```
+
+Confirms the connection string works before Cloud Run tries it.
 
 ---
 
@@ -152,7 +136,7 @@ Create one secret per env var below. For each: name (exactly as listed), paste t
 | `GEMINI_API_KEY` | from your local `.env` |
 | `QDRANT_URL` | `https://a034457f-75ff-486d-b27e-225898eecacb.us-east4-0.gcp.cloud.qdrant.io` (from `.env.production`) |
 | `QDRANT_API_KEY` | from `.env.production` |
-| `REDIS_URL` | `redis://10.x.x.3:6379` (from Phase C.3) |
+| `REDIS_URL` | `rediss://default:<password>@<id>.upstash.io:6379` (from Phase C.2) |
 | `RESEND_API_KEY` | from `.env` |
 | `FEEDBACK_TO_EMAIL` | your inbox |
 | `FEEDBACK_FROM_EMAIL` | sender address |
@@ -258,16 +242,25 @@ Edit `cloudbuild.yaml`, push to main, trigger fires. Or for a one-off hotfix: **
 
 ### Cost ballpark (steady state, light traffic)
 - Cloud Run: pay-per-request, ~$0–5/mo for hobby traffic
-- Memorystore Basic 1 GB: ~$35/mo
-- VPC Connector (2 × f1-micro): ~$10/mo
+- Upstash Redis free tier: $0 (10K commands/day, 256 MB)
 - Artifact Registry storage: <$1/mo
 - Cloud Build: 120 free build-minutes/day; well under that
 - Qdrant Cloud free tier: $0
-- **Total**: ~$45–55/mo
+- **Total**: ~$0–5/mo
+
+### Tearing down the original Memorystore + VPC stack
+
+If you initially provisioned Memorystore + a VPC connector (per an earlier version of this runbook) and have now switched to Upstash, delete these to stop the ~$45/mo bill:
+
+1. **Memorystore Redis**: Memorystore → Redis → `den-bot-redis` → **Delete**.
+2. **Serverless VPC Access Connector**: VPC network → Serverless VPC access → `den-bot-connector` → **Delete**.
+3. **Private services connection** (optional — no ongoing cost, but unused): VPC network → VPC networks → `default` → Private services connection → Connections → delete the Google Cloud Platform connection. Then Allocated IP ranges → delete `google-managed-services-default`.
+
+The allocated IP range and connection are free if left in place — only delete them if you want a clean slate.
 
 ### Tightening for prod (later)
 - Replace `--allow-unauthenticated` with IAP or a shared-secret header check
 - Add a token-bucket rate limiter on `/query` (Gemini calls aren't free)
-- Switch Memorystore to Standard HA if conversation continuity becomes important
+- Upgrade Upstash tier if traffic exceeds 10K commands/day (each /query writes a few checkpoint keys)
 - Tighten `ALLOWED_ORIGINS` (already done — only `bluecypher.ai` + `www.bluecypher.ai` in `cloudbuild.yaml`)
 - Move ingest scripts into a one-shot Cloud Run Job for prod re-ingests (instead of running locally against the cloud URL)
