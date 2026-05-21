@@ -73,10 +73,22 @@ Migrated via snapshot/restore (bit-for-bit) into `us-east4` cluster. Phase 5 par
 - One payload index added on `metadata.neighborhood_name` (keyword) on both clusters — required by Qdrant Cloud's `strict_mode_config.unindexed_filtering_retrieve=false`. Filters live in `app/tools/weather.py` and `app/tools/rtd_arrivals.py`.
 - Snapshot file lives under `snapshots/` (gitignored); safe to delete after the fallback window closes.
 
-### Remaining tasks
-- **Redis Memorystore on GCP** — backs the LangGraph checkpointer (`REDIS_URL`). Provision the instance, attach Cloud Run via a VPC connector. The checkpointer code doesn't care about backing store, just the connection string.
-- **Cloud Run for the FastAPI server** — build + push container to Artifact Registry. Set as Cloud Run secrets: `GEMINI_API_KEY`, `QDRANT_URL`, `QDRANT_API_KEY`, `REDIS_URL`, `RESEND_API_KEY`, `FEEDBACK_TO_EMAIL`, `FEEDBACK_FROM_EMAIL`, `LANGCHAIN_*`, `TAVILY_API_KEY`, `ALLOWED_ORIGINS`. Match Cloud Run region to Qdrant Cloud's `us-east4`.
-- Tighten `ALLOWED_ORIGINS` for prod (drop the localhost entries from the deployed value).
+### Cloud Build + Cloud Run scaffolding — done (2026-05-19, in commits on `feature/server-deploy`)
+GCP project `blue-cypher`, region `us-east4`. Artifact Registry repo + Cloud Build GitHub trigger + Cloud Run service + 9 Secret Manager secrets all provisioned via the console. `cloudbuild.yaml` builds → pushes → deploys with `--set-secrets` (declarative pattern: YAML is source of truth). See `deployment.md` for the full console runbook.
+
+### Paused mid-Phase F — resume sequence
+
+First deploy crashed on `redis.exceptions.ResponseError: JSON module is not loaded`. Memorystore Basic doesn't ship RedisJSON/RediSearch modules that `langgraph-checkpoint-redis` requires. Pivoted to **Upstash Redis** (free tier, modules included, public TLS — no VPC). Commit `9345764` drops `--vpc-connector` from `cloudbuild.yaml`.
+
+To resume (full detail in memory `next_focus_deployment.md`):
+1. Provision Upstash DB (`den-bot-redis`, Regional, us-east-1, TLS)
+2. Update `REDIS_URL` secret with new `rediss://default:<pw>@<id>.upstash.io:6379` value
+3. Push `feature/server-deploy` and merge to main → Cloud Build trigger fires
+4. Smoke from frontend (queries in `deployment.md` Phase F.3)
+5. Tear down Memorystore + VPC connector (~$45/mo) once new deploy is green
+
+### Remaining (after Cloud Run is green)
+- Tighten `ALLOWED_ORIGINS` for prod (already done — only `bluecypher.ai` + `www.bluecypher.ai` in `cloudbuild.yaml`).
 - Add a lightweight auth layer if the frontend isn't going to be our own trusted deployment.
 - Rate limiting (token bucket on `/query`) — Gemini calls aren't free.
 
