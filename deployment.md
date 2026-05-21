@@ -82,46 +82,59 @@ Done. The image will land at `us-east4-docker.pkg.dev/blue-cypher/den-bot/den-bo
 
 ---
 
-## Phase C — Upstash Redis
+## Phase C — Redis Cloud (Redis 8)
 
-`langgraph-checkpoint-redis` requires RedisJSON + RediSearch modules (the same set the local `redis/redis-stack-server` image provides). Upstash supports both modules on every tier, exposes a public TLS endpoint, and has a free tier that covers hobby traffic.
+`langgraph-checkpoint-redis` requires the RediSearch + RedisJSON modules. **Redis 8** bundles both into core, so any Redis Cloud database running v8 has them available by default — no module checkboxes needed.
 
 ### C.1 Provision the database
 
-1. Sign up / log in at **https://upstash.com**
-2. **Redis** → **Create Database**
-3. Settings:
-   - Name: **`den-bot-redis`**
-   - Type: **Regional** (Global is overkill and pricier)
-   - Region: **us-east-1 (Virginia)** — closest Upstash region to GCP us-east4
-   - Eviction: **Off** (we want checkpoints to persist; we'll rely on TTL set by `MEMORY_TTL_MINUTES`)
-   - TLS: **Enabled** (default)
-4. **Create**
+1. Sign up / log in at **https://redis.com/try-free/**
+2. In the Redis Cloud Console, choose **Essentials** → **Free** (30 MB).
+3. Create the database:
+   - **Name**: `den-bot-redis`
+   - **Cloud vendor**: AWS
+   - **Region**: `us-east-1 (N. Virginia)` — closest to GCP us-east4
+   - **Redis version**: **8** (modules are built in; no separate selection required)
+   - **High availability**: Off (free tier)
+   - **Data persistence**: leave at default (free tier may force off; fine — checkpoints have TTL)
+4. **Activate** / **Create**
+
+Provisioning takes ~30 seconds.
 
 ### C.2 Capture the connection string
 
-Open the database → **Details** tab → **Endpoint** section.
+Open the database → **Configuration** tab → **General** section.
 
-You want the **`redis://` connection string** that includes the password. It looks like:
+- **Public endpoint**: `redis-XXXXX.cNN.region.cloud.redislabs.com:PORT`
+- **Default user password**: click the eye icon to reveal
+
+Build the URL (TLS is on by default on Redis Cloud):
 
 ```
-rediss://default:<long-random-password>@<region>-<id>.upstash.io:6379
+rediss://default:<password>@redis-XXXXX.cNN.region.cloud.redislabs.com:PORT
 ```
-
-> **Use `rediss://` (two s's, with TLS), not `redis://`.** Upstash requires TLS. `redis-py` reads the scheme and configures the connection accordingly.
 
 This value goes into the `REDIS_URL` secret in Phase D.
 
-### C.3 Quick smoke test (optional)
+### C.3 Verify modules before deploying
 
-From your laptop, with `redis-cli` installed (`brew install redis`):
+This is the step we skipped on the previous two attempts. Confirm `FT._LIST` works against the new DB:
 
 ```bash
-redis-cli -u "rediss://default:<password>@<region>-<id>.upstash.io:6379" PING
-# → PONG
+redis-cli -u "rediss://default:<password>@redis-XXXXX.cNN.region.cloud.redislabs.com:PORT" FT._LIST
+# → (empty array)  ← good: module loaded, no indexes yet
 ```
 
-Confirms the connection string works before Cloud Run tries it.
+If you get `(error) ERR unknown command 'FT._LIST'`, the modules aren't available — recheck that the database is Redis 8.
+
+Also verify JSON:
+
+```bash
+redis-cli -u "rediss://..." JSON.SET test '$' '{"ok": true}'
+# → OK
+```
+
+If both pass, the DB is compatible. Update `REDIS_URL` in Secret Manager (new version) and re-trigger Cloud Build.
 
 ---
 
