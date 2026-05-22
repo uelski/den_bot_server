@@ -51,6 +51,13 @@ data
 *.zip
 ODC_*
 !data/ODC_POP_ACS20172021NBRHDCOMMON.geojson
+# RTD static GTFS lookup tables used by app/tools/_rtd_static.py to enrich
+# realtime feeds (route_id → "W Line", stop_id → name/coords, trip_id → route).
+# The rest of the GTFS bundle (shapes.txt, stop_times.txt, calendar*) is unused
+# at runtime and stays excluded.
+!data/rtd_gtfs/stops.txt
+!data/rtd_gtfs/routes.txt
+!data/rtd_gtfs/trips.txt
 
 # One-off ingest + utility scripts; not invoked from the app at runtime
 scripts
