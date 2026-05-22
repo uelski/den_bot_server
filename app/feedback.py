@@ -279,13 +279,29 @@ def _resend_payload(
     return payload
 
 
+def _clean_env(value: str | None) -> str | None:
+    """Strip whitespace + matching surrounding quotes from an env value.
+
+    Mirrors python-dotenv's behavior so a value like `FOO="bar"` in .env
+    and the literal string `"bar"` in Secret Manager produce the same
+    runtime string. Without this, Resend rejects `from` with a 422 when
+    the secret was set with quotes around it.
+    """
+    if value is None:
+        return None
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+        value = value[1:-1].strip()
+    return value or None
+
+
 async def _send_via_resend(
     body: BugFeedback | DataSourceFeedback | LoadingTextFeedback | GeneralFeedback,
     feedback_id: str,
 ) -> None:
-    api_key = os.getenv(RESEND_API_KEY_ENV)
-    to_email = os.getenv(FEEDBACK_TO_EMAIL_ENV)
-    from_email = os.getenv(FEEDBACK_FROM_EMAIL_ENV) or DEFAULT_FROM_EMAIL
+    api_key = _clean_env(os.getenv(RESEND_API_KEY_ENV))
+    to_email = _clean_env(os.getenv(FEEDBACK_TO_EMAIL_ENV))
+    from_email = _clean_env(os.getenv(FEEDBACK_FROM_EMAIL_ENV)) or DEFAULT_FROM_EMAIL
 
     if not api_key or not to_email:
         # Caller is expected to have already 503'd in this case — this is
