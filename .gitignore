@@ -19,8 +19,14 @@ __pycache__/
 *.pyc
 enriched_denver_catalog_v2.json
 
-# RTD GTFS data — large, replaceable from the public download
-data/rtd_gtfs/
+# RTD GTFS data — large, replaceable from the public download.
+# Exception: the three lookup tables (stops/routes/trips) are read by
+# app/tools/_rtd_static.py at runtime to enrich realtime feeds, so they're
+# committed (~1.8 MB) and baked into the Cloud Run image.
+data/rtd_gtfs/*
+!data/rtd_gtfs/stops.txt
+!data/rtd_gtfs/routes.txt
+!data/rtd_gtfs/trips.txt
 data/google_transit.zip
 
 # Denver parks geojson — replaceable from the Denver Open Data Catalog hub
