@@ -10,19 +10,19 @@ GitHub (main push)
             └── builds image → Artifact Registry (us-east4)
                        └── deploys → Cloud Run service "den-bot-server"
                                           │
-                                          └── public TLS: Gemini, Qdrant Cloud, Upstash Redis,
+                                          └── public TLS: Gemini, Qdrant Cloud, Redis Cloud,
                                                           RTD feeds, Tavily, Resend
                                           
                                   Secret Manager: GEMINI_API_KEY, QDRANT_*, REDIS_URL, RESEND_*, LANGCHAIN_*, TAVILY_API_KEY
 ```
 
-> **Why no VPC / Memorystore?** `langgraph-checkpoint-redis` requires the RedisJSON + RediSearch modules. Memorystore Basic/Standard ships vanilla OSS Redis with no modules, so the container can't initialize the checkpointer. We use **Upstash Redis** instead — public TLS endpoint, modules included, no VPC needed.
+> **Why no VPC?** `langgraph-checkpoint-redis` requires the RedisJSON + RediSearch modules. **Redis Cloud running Redis 8** bundles both into core and exposes a public TLS endpoint — no VPC needed. Memorystore and Upstash were tried first and both failed; see Phase C for the full story.
 
 | Resource | Name | Region |
 |---|---|---|
 | Artifact Registry repo | `den-bot` | us-east4 |
 | Cloud Run service | `den-bot-server` | us-east4 |
-| Upstash Redis database | `den-bot-redis` | us-east-1 (Virginia, closest to us-east4) |
+| Redis Cloud database | `den-bot-redis` | AWS us-east-1 (Virginia, closest to us-east4) |
 | Build trigger | `den-bot-server-main` | global |
 
 ---
@@ -36,10 +36,7 @@ Console → **APIs & Services** → **Enabled APIs & Services** → **+ Enable A
 - Cloud Build API
 - Artifact Registry API
 - Secret Manager API
-- Memorystore for Redis API
-- Serverless VPC Access API
-- Service Networking API
-- Compute Engine API
+- Compute Engine API (for the default runtime SA)
 
 Wait until all show "Enabled".
 
@@ -149,7 +146,7 @@ Create one secret per env var below. For each: name (exactly as listed), paste t
 | `GEMINI_API_KEY` | from your local `.env` |
 | `QDRANT_URL` | `https://a034457f-75ff-486d-b27e-225898eecacb.us-east4-0.gcp.cloud.qdrant.io` (from `.env.production`) |
 | `QDRANT_API_KEY` | from `.env.production` |
-| `REDIS_URL` | `rediss://default:<password>@<id>.upstash.io:6379` (from Phase C.2) |
+| `REDIS_URL` | `rediss://default:<password>@redis-XXXXX.cNN.region.cloud.redislabs.com:PORT` (from Phase C.2) |
 | `RESEND_API_KEY` | from `.env` |
 | `FEEDBACK_TO_EMAIL` | your inbox |
 | `FEEDBACK_FROM_EMAIL` | sender address |
@@ -210,8 +207,8 @@ Watch the build in **Cloud Build** → **History**. Expected duration: 3–6 min
 
 If it fails: read the step logs. Common first-build issues:
 - IAM: build hits a "permission denied" in step 3 (deploy) → re-check Phase A.2 grants for the Cloud Build SA.
-- VPC connector not ready: deploy fails with `vpc connector not found` → verify Phase C.2 status is "Ready".
 - Secret not found: deploy fails with `secret not found` → verify the name matches exactly (Phase D).
+- Redis init error: container logs show `AsyncRedisSaver.asetup()` failure → confirm `REDIS_URL` points at a Redis 8 database and the modules verified in Phase C.3.
 
 ### F.2 Hit /health
 
@@ -255,7 +252,7 @@ Edit `cloudbuild.yaml`, push to main, trigger fires. Or for a one-off hotfix: **
 
 ### Cost ballpark (steady state, light traffic)
 - Cloud Run: pay-per-request, ~$0–5/mo for hobby traffic
-- Upstash Redis free tier: $0 (10K commands/day, 256 MB)
+- Redis Cloud Essentials free tier: $0 (30 MB)
 - Artifact Registry storage: <$1/mo
 - Cloud Build: 120 free build-minutes/day; well under that
 - Qdrant Cloud free tier: $0
@@ -263,17 +260,19 @@ Edit `cloudbuild.yaml`, push to main, trigger fires. Or for a one-off hotfix: **
 
 ### Tearing down the original Memorystore + VPC stack
 
-If you initially provisioned Memorystore + a VPC connector (per an earlier version of this runbook) and have now switched to Upstash, delete these to stop the ~$45/mo bill:
+If you initially provisioned Memorystore + a VPC connector (per an earlier version of this runbook) before settling on Redis Cloud, delete these to stop the ~$45/mo bill:
 
 1. **Memorystore Redis**: Memorystore → Redis → `den-bot-redis` → **Delete**.
 2. **Serverless VPC Access Connector**: VPC network → Serverless VPC access → `den-bot-connector` → **Delete**.
 3. **Private services connection** (optional — no ongoing cost, but unused): VPC network → VPC networks → `default` → Private services connection → Connections → delete the Google Cloud Platform connection. Then Allocated IP ranges → delete `google-managed-services-default`.
+4. **Disable now-unused APIs** (optional, free): APIs & Services → disable *Memorystore for Redis API*, *Serverless VPC Access API*, *Service Networking API*.
+5. **Trim the runtime SA** (optional, hygiene): IAM → Cloud Run runtime SA → remove `roles/vpcaccess.user` if it was granted earlier.
 
 The allocated IP range and connection are free if left in place — only delete them if you want a clean slate.
 
 ### Tightening for prod (later)
 - Replace `--allow-unauthenticated` with IAP or a shared-secret header check
 - Add a token-bucket rate limiter on `/query` (Gemini calls aren't free)
-- Upgrade Upstash tier if traffic exceeds 10K commands/day (each /query writes a few checkpoint keys)
+- Upgrade Redis Cloud tier if checkpoint storage exceeds the 30 MB free Essentials cap (each /query writes a few checkpoint keys with a 30-day TTL)
 - Tighten `ALLOWED_ORIGINS` (already done — only `bluecypher.ai` + `www.bluecypher.ai` in `cloudbuild.yaml`)
 - Move ingest scripts into a one-shot Cloud Run Job for prod re-ingests (instead of running locally against the cloud URL)
