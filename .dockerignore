@@ -42,12 +42,15 @@ graph.mmd
 graph.png
 notes.txt
 
-# Data files — ingest-time only; runtime reads from Qdrant
+# Data files — ingest-time only; runtime reads from Qdrant.
+# Exception: the ACS neighborhood geojson is loaded by app/neighborhoods/resolver.py
+# at startup to populate OFFICIAL_NAMES. Keep it in the build context.
 data
 *.geojson
 *.csv
 *.zip
 ODC_*
+!data/ODC_POP_ACS20172021NBRHDCOMMON.geojson
 
 # One-off ingest + utility scripts; not invoked from the app at runtime
 scripts

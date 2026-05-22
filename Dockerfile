@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
+COPY data/ODC_POP_ACS20172021NBRHDCOMMON.geojson ./data/ODC_POP_ACS20172021NBRHDCOMMON.geojson
 
 ENV PORT=8080
 EXPOSE 8080

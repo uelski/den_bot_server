@@ -76,19 +76,24 @@ Migrated via snapshot/restore (bit-for-bit) into `us-east4` cluster. Phase 5 par
 ### Cloud Build + Cloud Run scaffolding — done (2026-05-19, in commits on `feature/server-deploy`)
 GCP project `blue-cypher`, region `us-east4`. Artifact Registry repo + Cloud Build GitHub trigger + Cloud Run service + 9 Secret Manager secrets all provisioned via the console. `cloudbuild.yaml` builds → pushes → deploys with `--set-secrets` (declarative pattern: YAML is source of truth). See `deployment.md` for the full console runbook.
 
-### Paused mid-Phase F — resume sequence
+### Cloud Run live — but two runtime data files missing from container
 
-First deploy crashed on `redis.exceptions.ResponseError: JSON module is not loaded`. Memorystore Basic doesn't ship RedisJSON/RediSearch modules that `langgraph-checkpoint-redis` requires. Pivoted to **Upstash Redis** (free tier, modules included, public TLS — no VPC). Commit `9345764` drops `--vpc-connector` from `cloudbuild.yaml`.
+Deploy is green and healthy via Postman after 3 Redis iterations (final: **Redis Cloud free tier on Redis 8**, which bundles RediSearch + RedisJSON into core). Memorystore and Upstash both attempted and failed: Memorystore ships zero modules; Upstash's RediSearch support excludes `FT._LIST` which `AsyncRedisSaver.asetup()` needs.
 
-To resume (full detail in memory `next_focus_deployment.md`):
-1. Provision Upstash DB (`den-bot-redis`, Regional, us-east-1, TLS)
-2. Update `REDIS_URL` secret with new `rediss://default:<pw>@<id>.upstash.io:6379` value
-3. Push `feature/server-deploy` and merge to main → Cloud Build trigger fires
-4. Smoke from frontend (queries in `deployment.md` Phase F.3)
-5. Tear down Memorystore + VPC connector (~$45/mo) once new deploy is green
+Frontend smoke surfaced a follow-up issue: **`Dockerfile` only copies `app/`**, so two runtime data dependencies aren't in the container:
 
-### Remaining (after Cloud Run is green)
-- Tighten `ALLOWED_ORIGINS` for prod (already done — only `bluecypher.ai` + `www.bluecypher.ai` in `cloudbuild.yaml`).
+1. `data/ODC_POP_ACS20172021NBRHDCOMMON.geojson` (520 KB, tracked in git) — populates `OFFICIAL_NAMES` in `app/neighborhoods/resolver.py`. **Without it, every neighborhood resolves to "not official" → weather + RTD arrivals tools fail.** Local fix staged on `feature/server-deploy` (uncommitted): adds explicit `COPY` to Dockerfile + `!`-exception to `.dockerignore`.
+2. `data/rtd_gtfs/` (~100 MB, gitignored) — read by `app/tools/_rtd_static.py`. Needs a design decision: bake into image, download at build, or stage via Cloud Storage.
+
+### Resume sequence
+
+Detail in memory `next_focus_deployment.md`. Short version:
+1. Commit + push the staged Dockerfile + .dockerignore changes → trigger redeploy → verify Capitol Hill weather works.
+2. Decide + implement GTFS strategy (most likely: download at Docker build time).
+3. Cleanup: tear down Memorystore + VPC connector (~$45/mo) and the unused Upstash DB.
+
+### Remaining (after data files are wired)
+- Maybe add localhost back to `ALLOWED_ORIGINS` in `cloudbuild.yaml` so dev frontend can call prod backend.
 - Add a lightweight auth layer if the frontend isn't going to be our own trusted deployment.
 - Rate limiting (token bucket on `/query`) — Gemini calls aren't free.
 
