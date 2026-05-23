@@ -1,10 +1,10 @@
 # Cloud Build pipeline — triggered on push to main.
 # Steps: build container -> push to Artifact Registry -> deploy to Cloud Run.
 #
-# Redis (LangGraph checkpointer) runs on Upstash, NOT Memorystore.
-# langgraph-checkpoint-redis requires RedisJSON + RediSearch modules, which
-# Memorystore Basic/Standard does not provide. Upstash supports both, with a
-# public TLS endpoint — so no VPC connector is needed.
+# Redis (LangGraph checkpointer) runs on Redis Cloud (Redis 8).
+# langgraph-checkpoint-redis requires RedisJSON + RediSearch modules. Redis 8
+# bundles both into core and exposes a public TLS endpoint, so no VPC connector
+# is needed. See deployment.md Phase C for why Memorystore and Upstash failed.
 #
 # Resolved variables:
 #   $PROJECT_ID    = blue-cypher              (Cloud Build built-in)
