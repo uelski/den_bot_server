@@ -147,7 +147,7 @@ Worker → download from GCS → parse → chunk → embed → upsert to Qdrant 
 - **Push subscription, not pull** — forces idiomatic handling of ack deadlines and 4xx-vs-5xx ack semantics (4xx ack-and-drop, 5xx nack-and-retry).
 - **Dead-letter topic + max delivery attempts** from day one. With DLQ a poison PDF lands in a dead-letter bucket for inspection instead of wedging the queue.
 - **Idempotent worker.** Pub/Sub is at-least-once and GCS can also redeliver notifications. Derive Qdrant point IDs deterministically from `(document_id, chunk_index)` — re-parsing the same PDF overwrites instead of duplicating. The GCS object name is a natural `document_id`.
-- **Worker pipeline:** download PDF from GCS → parse (try `pypdf` first, escalate to `unstructured` or a vision model for scanned docs) → chunk → embed with the same Google `gemini-embedding-001` as the catalog (so cross-collection retrieval mixes cleanly in vector space) → upsert to the new collection.
+- **Worker pipeline:** download PDF from GCS → parse with `pymupdf` → split into parent/child chunks (see "Parsing + chunking strategy" below) → embed children only with the same Google `gemini-embedding-001` as the catalog (so cross-collection retrieval mixes cleanly in vector space) → upsert children with parent text denormalized into the payload.
 
 ### Upload metadata + categorization
 
@@ -182,13 +182,20 @@ Frontend just spreads `required_headers` into the PUT call; no logic.
 | `document_id` | server-derived (slugified object path) | idempotency key for Qdrant point IDs |
 | `uploaded_at` | server-set when signed URL is issued | audit / sort order |
 
-**Category, not collection.** Frontend selects a *category* (`ordinance` /
-`council` / `budget` / `finance` / `transparency` / ...) which becomes a
-Qdrant payload field. **Never let the frontend name the Qdrant collection
-directly** — that's an injection vector into the catalog collection. One
-PDF KB collection with a `category` filter scales better than N collections:
-the retriever still fans out across just two (catalog + KB), and adding a
-new category is a config change, not a graph change.
+**Category, not collection.** Frontend selects a *category* from a fixed
+allowlist which becomes a Qdrant payload field. **Never let the frontend
+name the Qdrant collection directly** — that's an injection vector into the
+catalog collection. One PDF KB collection with a `category` filter scales
+better than N collections: the retriever still fans out across just two
+(catalog + KB), and adding a new category is a config change, not a graph
+change.
+
+**v1 category allowlist:**
+`ordinance` / `council` / `budget` / `finance` / `transparency` / `general`
+
+`general` is the escape hatch for any doc that doesn't fit the named buckets
+— prevents the upload form from blocking on a missing category. Add new
+categories as needed (server-side allowlist update + frontend select option).
 
 **Where each field ultimately lives:**
 - **GCS object path** — encodes `category` and slugified filename for routing/inspection
@@ -203,15 +210,272 @@ new category is a config change, not a graph change.
 
 Add a Firestore `documents` collection (or a small Postgres table) only if/when those operations start to bite. Don't preemptively build.
 
+### Metadata flow (API → GCS → Pub/Sub → worker)
+
+How upload metadata (category, title, source URL, filename, etc.) actually
+reaches the worker. **Key property: the worker has zero coupling to the
+API server.** It never calls back; the GCS Pub/Sub notification carries
+every field it needs. The carrier mechanism is GCS custom metadata
+(`x-goog-meta-*` headers), which GCS persists with the object and
+automatically includes in the notification payload.
+
+**Chain:**
+
+```
+Frontend form  →  /admin/pdf-upload-url  →  signed URL with required headers
+                                          ↓
+                  Frontend PUT  →  GCS object + custom metadata attached
+                                          ↓
+                  GCS object.finalize  →  Pub/Sub notification (metadata in body)
+                                          ↓
+                  Push to worker  →  Worker reads metadata from message
+```
+
+**Step 1 — API binds metadata into the signed URL:**
+
+```python
+# In this repo's /admin/pdf-upload-url handler:
+document_id = f"pdfs/{category}/{timestamp}-{slug(original_filename)}.pdf"
+uploaded_at = datetime.utcnow().isoformat()
+
+custom_metadata = {
+    "document_title": document_title,
+    "source_url": source_url,
+    "category": category,
+    "original_filename": original_filename,
+    "document_id": document_id,
+    "uploaded_at": uploaded_at,
+}
+
+signed_url = bucket.blob(document_id).generate_signed_url(
+    version="v4",
+    method="PUT",
+    expiration=timedelta(minutes=10),
+    content_type="application/pdf",
+    headers={f"x-goog-meta-{k}": v for k, v in custom_metadata.items()},
+)
+
+return {
+    "signed_url": signed_url,
+    "object_path": document_id,
+    "required_headers": {
+        "Content-Type": "application/pdf",
+        **{f"x-goog-meta-{k}": v for k, v in custom_metadata.items()},
+    },
+}
+```
+
+**Step 2 — Frontend PUTs with required_headers verbatim.** GCS persists
+the `x-goog-meta-*` values as custom metadata on the object. Any mismatch
+between PUT headers and what was signed → 403. That's the tamper-proofing.
+
+**Step 3 — Pub/Sub push message arrives at the worker.** The `data` field
+is base64-encoded JSON; decoded it's the full GCS object metadata
+including the `metadata` dict (with the `x-goog-meta-` prefix stripped):
+
+```json
+{
+  "bucket": "your-pdf-bucket",
+  "name": "pdfs/ordinance/2026-05-25-municode-denver-co.pdf",
+  "contentType": "application/pdf",
+  "size": "4823901",
+  "metadata": {
+    "document_title": "Denver Code of Ordinances",
+    "source_url": "https://library.municode.com/...",
+    "category": "ordinance",
+    "original_filename": "municode-denver-co.pdf",
+    "document_id": "pdfs/ordinance/2026-05-25-municode-denver-co.pdf",
+    "uploaded_at": "2026-05-25T..."
+  }
+}
+```
+
+**Step 4 — Worker extracts + downloads + processes:**
+
+```python
+# In worker's /pubsub/pdf-ingest handler:
+envelope = await request.json()
+gcs_event = json.loads(base64.b64decode(envelope["message"]["data"]))
+
+bucket_name = gcs_event["bucket"]
+object_name = gcs_event["name"]
+custom = gcs_event["metadata"]  # all our fields, prefix already stripped
+
+pdf_bytes = (
+    storage_client.bucket(bucket_name).blob(object_name).download_as_bytes()
+)
+# Parse → chunk → embed → upsert; custom["document_title"], custom["category"],
+# etc. go straight into each Qdrant point's payload.
+```
+
+**Pub/Sub notification configuration (one-time):**
+
+```bash
+gcloud storage buckets notifications create gs://your-pdf-bucket \
+  --topic=pdf-ingest-topic \
+  --event-types=OBJECT_FINALIZE \
+  --payload-format=json
+```
+
+`--payload-format=json` is the version that includes the full object JSON
+(with the `metadata` dict) in the message body. The thinner format would
+force the worker to call back to GCS for metadata — defeating the whole
+"the notification is the message" property.
+
+**Implications worth keeping in mind:**
+
+- **No metadata-passing endpoint** between services. No "tell the worker about this new doc" call. The Pub/Sub notification IS the message.
+- **No callback path.** API can be fully down and ingestion still works (worker only depends on GCS + Pub/Sub + Qdrant + the embedding API). API outage stops *new* uploads being initiated; it doesn't stop in-flight ones from completing.
+- **Metadata key naming:** stick to `snake_case` to avoid header-case confusion. GCS preserves the keys after the prefix as-is.
+
+### Parsing + chunking strategy
+
+**Parser:** `pymupdf`. Faster than `pypdf`, handles rotated text, weird
+encodings, and embedded fonts better. AGPL-3.0 license — fine for this
+project, would matter for closed-source commercial relicensing. Import is
+`import pymupdf` (the legacy `fitz` name still works).
+
+**Chunking: parent/child via `RecursiveCharacterTextSplitter`** — small
+chunks for precise vector matching, larger chunks returned to the generator
+for context. The standard "match small, return big" pattern.
+
+**Params (v1):**
+- **Parent**: ~1500 tokens, ~150 token overlap (~10%). Big enough to hold a coherent section.
+- **Child**: ~300 tokens, ~50 token overlap. Small enough that the cross-encoder can score them precisely.
+- Each parent splits into 3–5 children that carry a stable `parent_index` linking back.
+- Token-based, not character-based — use a tokenizer matching the embedding model.
+- Recursive splitter tries paragraph → sentence → word → character boundaries before falling back to a hard cut.
+
+**Storage shape: single Qdrant collection, parent text denormalized into
+child payload.** Children are the only points indexed; parents ride along in
+the payload. One Qdrant call returns everything the generator needs.
+
+```python
+{
+    "id": deterministic_uuid(document_id, child_index),
+    "vector": embed(child_text),  # only children get embedded
+    "payload": {
+        # Document-level (constant across all children of this doc)
+        "document_id": "pdfs/ordinance/2026-05-25-municode.pdf",
+        "document_title": "Denver Code of Ordinances",     # admin-edited, used in citations
+        "original_filename": "municode-denver-co.pdf",     # literal upload, audit-grade provenance
+        "category": "ordinance",
+        "source_url": "https://library.municode.com/...",
+        "source_collection": "knowledge_base",
+        "uploaded_at": "2026-05-25T...",
+
+        # Child-level
+        "child_index": 7,
+        "child_text": "...",          # the ~300-token chunk that was embedded
+        "child_start_page": 12,
+        "child_end_page": 12,         # child can span page breaks on dense pages
+
+        # Parent-level (denormalized — duplicated across siblings)
+        "parent_index": 2,            # multiple children share this
+        "parent_text": "...",         # the ~1500-token surrounding chunk
+        "parent_start_page": 11,
+        "parent_end_page": 14,
+    }
+}
+```
+
+**Why both `document_title` and `original_filename`:** `document_title` is
+admin-edited at upload time and can be wrong, abbreviated, or changed later.
+`original_filename` is the literal file the worker processed and is the only
+fully reliable provenance for "where did this chunk really come from."
+Citations use `document_title`; debugging and audit use `original_filename`.
+
+**Why single collection (not two):**
+- One Qdrant round-trip per query, not two.
+- One upsert path in the worker; one delete-by-document_id path.
+- No schema-drift risk between two collections that have to stay in sync.
+- Parent text duplication across siblings is ~50–100 MB total at this scale — Qdrant doesn't care.
+- Matches LangChain's `ParentDocumentRetriever` pattern conceptually.
+
+The clean argument for two collections would be querying parents directly
+as a separate path (e.g., "summarize the whole budget doc"). Not on the
+roadmap, so the second collection is overhead with no payoff.
+
+**Retrieval flow with parent/child:**
+
+```
+1. Embed query → Qdrant similarity search on children → top-20
+2. Cohere rerank against child_text → ranked list
+3. Dedupe by (document_id, parent_index), keep highest-ranked child per parent
+4. Take top-5 unique parents
+5. Pass parent_text to the generator with citation = document_title + parent_start_page–parent_end_page
+```
+
+**Citation style: parent-range, not child-page.** Render as
+`"Denver Code of Ordinances, pages 11–14"`. Reflects the actual scope the
+LLM reasoned over. Citing the child page (`"page 12"`) looks more precise
+but is misleading — the model saw the entire parent, not just the child.
+Don't claim more precision than you have.
+
+**Why rerank on children, not parents:**
+- Children are the granularity that matched — let the cross-encoder exploit precise matching.
+- Reranking 20 × 1500-token parents would be slow and might hit token limits.
+- Parent expansion is purely for the generator's context, not for ranking.
+
+**Why dedupe after rerank, not before:** if children A and B both come from
+parent X, let the reranker score them independently — whichever scores
+higher tells you which part of parent X best matched the query. Then
+collapse.
+
+**Honest trade-offs accepted:**
+- Municipal code has structure (titles/chapters/sections) that recursive splitting loses. A clause about noise might end up in a parent labeled by a previous chapter heading. Acceptable for v1; structure-aware parsing for municode is a possible later upgrade.
+- Financial reports with tables: splitter can break a table mid-row. Acceptable for v1; if FY-report query quality suffers, table-aware extraction is the upgrade.
+- Semantic chunking was considered and skipped: marginal quality gain, real ingest-time cost (extra embedding calls), uneven chunk sizes that complicate retrieval. Not worth it.
+
 ### Retrieval changes
 Catalog and PDF KB get searched **in parallel** per query, then merged before
 grading. A question about "Denver zoning" could legitimately want both the
 catalog (the GIS layer) *and* the zoning PDF.
 
-- **Retriever node** runs both collections via `asyncio.gather` — don't serialize or end-to-end latency doubles.
-- **Reranker node becomes load-bearing**, not just a polish pass. It's the merge-and-reorder step on a mixed-provenance list. Cross-encoder rerank (Cohere Rerank, BGE-reranker, or similar) on top-20 → top-5 across both sources.
-- **Per-doc provenance metadata** — every chunk carries `source_collection: "catalog" | "knowledge_base"` plus PDF-specific fields (document_title, page_number, section). Generator branches citation style: catalog hits show `hub_url`; PDF hits show "from <document title>, page N".
+- **Retriever node** runs both collections via `asyncio.gather` — don't serialize or end-to-end latency doubles. KB side returns child hits with parent text already in payload (see Parsing + chunking strategy).
+- **Reranker node becomes load-bearing**, not just a polish pass. It's the merge-and-reorder step on a mixed-provenance list. **Cohere `rerank-english-v3.0`** — managed API, no infra, free tier covers our volume, ~100–300ms for top-20 candidates. Reranks against child_text (PDF) and full chunk text (catalog) uniformly; parent expansion happens after rerank on the KB side.
+- **Per-doc provenance metadata** — every chunk carries `source_collection: "catalog" | "knowledge_base"`. Catalog hits cite via `hub_url`; PDF hits cite via `document_title` + `parent_start_page`–`parent_end_page` range from the denormalized parent payload (see Parsing + chunking strategy for why range, not single page).
 - **No `main_router` change needed** — `data_search` continues to mean "RAG path"; the retriever node decides what that means internally.
+
+### Repo layout: monorepo with separate worker service
+
+The worker lives in a **`worker/` subdirectory of this repo**, not a
+separate repository. Deployment is still two distinct Cloud Run services
+(separate Dockerfiles, separate `gcloud run deploy` invocations), so the
+production-lessons isolation — separate scaling, failure domains, logs,
+cold starts — is fully preserved. What you get from monorepo:
+
+- **Atomic contract changes.** Editing the GCS object path convention, the metadata header keys, or the Qdrant payload schema can land in a single PR that touches both `app/` (signer + retriever) and `worker/` (parser + upserter). No cross-repo PR ceremony, no risk of one side merging while the other lags.
+- **One CI config.** Single test suite covers both. Shared schema duplication is fine for v1; if/when it starts drifting, promote shared types into an `app/shared/` package both sides import.
+- **One dev loop.** `docker compose up` brings up Qdrant + Redis + (eventually) a local Pub/Sub emulator + both services. No cloning two repos to run end-to-end.
+
+**Suggested structure:**
+
+```
+den_bot_server/
+├── app/                    # existing FastAPI (query API + admin endpoints)
+│   ├── graph/
+│   ├── tools/
+│   ├── main.py
+│   └── ...
+├── worker/                 # new FastAPI for Pub/Sub push
+│   ├── main.py             # /pubsub/pdf-ingest endpoint
+│   ├── pipeline/           # pymupdf parse + chunk + embed + upsert
+│   └── Dockerfile
+├── shared/                 # (later) Qdrant payload types, path conventions
+├── Dockerfile              # existing — for app/
+├── pyproject.toml          # one dependency tree, or split if it becomes bloated
+└── docker-compose.yml      # local dev: qdrant + redis + (later) pubsub emulator
+```
+
+**The blast-radius concern** (a worker bug crashing API deploys) is avoided
+by keeping separate Dockerfiles and separate Cloud Run services — the
+shared repo just means shared code review and shared CI, not shared
+runtime.
+
+**Upgrade path to two repos** if the shared dependency tree starts feeling
+bloated or the worker needs a fundamentally different runtime (GPU, larger
+container, different base image). Not a v1 concern.
 
 ### Future doc types
 PDFs first because they're the most common civic format. Images / scanned
