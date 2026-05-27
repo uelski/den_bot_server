@@ -13,11 +13,28 @@ handler.
 
 import base64
 import json
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
+from worker import main as worker_main
 from worker.main import app
+from worker.pipeline.process import IngestResult
+
+
+@pytest.fixture(autouse=True)
+def _stub_process_pdf(monkeypatch) -> MagicMock:
+    """Replace process_pdf with a stub so the handler doesn't try to
+    actually download from GCS / hit Qdrant during handshake tests.
+    Individual tests can override the return value or side_effect."""
+    stub = MagicMock(
+        return_value=IngestResult(
+            document_id="pdfs/ordinance/test.pdf", parents=1, children=2
+        )
+    )
+    monkeypatch.setattr(worker_main, "process_pdf", stub)
+    return stub
 
 
 @pytest.fixture
@@ -130,3 +147,23 @@ def test_pdf_ingest_rejects_missing_object_name(client: TestClient) -> None:
     event = {"bucket": "test-bucket", "metadata": {}}
     response = client.post("/pubsub/pdf-ingest", json=_make_envelope(event))
     assert response.status_code == 400
+
+
+def test_pdf_ingest_returns_404_when_object_missing(
+    client: TestClient, _stub_process_pdf
+) -> None:
+    """GCS 404 is a permanent failure; 4xx flags it for clearer logs even
+    though Pub/Sub will still retry until DLQ takes over."""
+    _stub_process_pdf.side_effect = FileNotFoundError("gs://b/x.pdf does not exist")
+    response = client.post("/pubsub/pdf-ingest", json=_make_envelope())
+    assert response.status_code == 404
+
+
+def test_pdf_ingest_returns_500_on_unknown_pipeline_failure(
+    client: TestClient, _stub_process_pdf
+) -> None:
+    """Unknown exception → 500 so the failure shows up as transient in logs;
+    Pub/Sub retries and DLQ catches true poison after max_delivery_attempts."""
+    _stub_process_pdf.side_effect = RuntimeError("qdrant unreachable")
+    response = client.post("/pubsub/pdf-ingest", json=_make_envelope())
+    assert response.status_code == 500

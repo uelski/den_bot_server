@@ -10,9 +10,13 @@ worker/Dockerfile). Same repo, different runtime. See ITERATION_V2.md §
 PDF Knowledge Base for the full design.
 
 Ack semantics (matters for production retries + DLQ):
-  - 2xx : success → Pub/Sub drops the message
-  - 5xx : transient failure → Pub/Sub retries with backoff
-  - 4xx : permanent failure → after max attempts, lands in the DLQ topic
+  - 2xx       : success → Pub/Sub drops the message
+  - non-2xx   : Pub/Sub treats as nack and retries with backoff. After the
+                subscription's max_delivery_attempts is exceeded, the
+                message is sent to the configured dead-letter topic.
+  - 4xx vs 5xx is semantic only (clearer logs, doesn't change Pub/Sub
+    behavior). Use 4xx for "this will never succeed" (corrupt input,
+    missing object) and 5xx for "transient, might work next time".
 """
 
 import base64
@@ -23,6 +27,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Request, status
+
+from worker.pipeline.process import process_pdf
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,6 +105,32 @@ async def pdf_ingest(request: Request) -> None:
         custom_metadata.get("category", "<missing>"),
     )
 
-    # Pipeline hand-off lands in build step B (download → parse → chunk →
-    # embed → upsert). Until then, parsing the envelope IS the test.
+    try:
+        result = process_pdf(
+            bucket=bucket,
+            object_name=object_name,
+            custom_metadata=custom_metadata,
+        )
+    except FileNotFoundError as exc:
+        # GCS object missing — permanent. 4xx is semantic; Pub/Sub still
+        # retries and will DLQ after max_delivery_attempts.
+        logger.warning("gcs object missing: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        )
+    except Exception as exc:
+        # Unknown failure — surface as 500 so logs flag it as a potentially
+        # transient issue. Pub/Sub retries; DLQ catches true poison.
+        logger.exception("ingest pipeline failed for %s/%s", bucket, object_name)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"ingest pipeline failed: {exc}",
+        )
+
+    logger.info(
+        "ingest succeeded: document_id=%s parents=%d children=%d",
+        result.document_id,
+        result.parents,
+        result.children,
+    )
     return None
