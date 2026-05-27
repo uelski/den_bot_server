@@ -58,9 +58,9 @@ steps:
       # Service was originally deployed with a VPC connector for Memorystore.
       # We've since moved to Redis Cloud (public TLS, no VPC). Clearing the
       # reference here is idempotent and prevents new revisions from failing
-      # validation against the now-deleted connector.
+      # validation against the now-deleted connector. (Egress setting becomes
+      # inert without a connector — there's no --clear-vpc-egress flag.)
       - --clear-vpc-connector
-      - --clear-vpc-egress
       # Custom delimiter (^##^) lets ALLOWED_ORIGINS contain commas.
       # See: https://cloud.google.com/sdk/gcloud/reference/topic/escaping
       - --set-env-vars=^##^QDRANT_COLLECTION_NAME=denver_gis_catalog##GEMINI_MODEL=gemini-2.5-flash##LANGCHAIN_TRACING_V2=true##LANGCHAIN_PROJECT=blue-cypher-prod##ALLOWED_ORIGINS=https://bluecypher.ai,https://www.bluecypher.ai##MEMORY_HISTORY_TURNS=8##MEMORY_TTL_MINUTES=43200##RTD_REALTIME_CACHE_TTL_SECONDS=30##TAVILY_CACHE_TTL_SECONDS=86400##RTD_USER_AGENT=blue-cypher-denver-rag (sam.vburgh@gmail.com)
