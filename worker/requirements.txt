@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+python-dotenv
+pydantic>=2.0
+
+# Pipeline deps land in build step B (pymupdf, langchain text splitters,
+# qdrant-client, google-genai embeddings, google-cloud-storage, cohere).
+# Keeping this minimal for now so the scaffold image stays lean.
