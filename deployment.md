@@ -264,6 +264,7 @@ If you initially provisioned Memorystore + a VPC connector (per an earlier versi
 
 1. **Memorystore Redis**: Memorystore → Redis → `den-bot-redis` → **Delete**.
 2. **Serverless VPC Access Connector**: VPC network → Serverless VPC access → `den-bot-connector` → **Delete**.
+   - ⚠️ Deleting the connector alone is not enough — the Cloud Run service still has a *reference* to the connector in its config, and every subsequent deploy will fail with `VPC connector ... does not exist` until that reference is cleared. The current `cloudbuild.yaml` handles this automatically via `--clear-vpc-connector` + `--clear-vpc-egress` on the deploy step (idempotent). If deploying outside Cloud Build, pass those same flags to `gcloud run deploy` once.
 3. **Private services connection** (optional — no ongoing cost, but unused): VPC network → VPC networks → `default` → Private services connection → Connections → delete the Google Cloud Platform connection. Then Allocated IP ranges → delete `google-managed-services-default`.
 4. **Disable now-unused APIs** (optional, free): APIs & Services → disable *Memorystore for Redis API*, *Serverless VPC Access API*, *Service Networking API*.
 5. **Trim the runtime SA** (optional, hygiene): IAM → Cloud Run runtime SA → remove `roles/vpcaccess.user` if it was granted earlier.
