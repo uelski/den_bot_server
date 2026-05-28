@@ -102,7 +102,7 @@ signed URL does **not** bypass browser CORS — GCS must return CORS headers or
 the preflight fails. Every `x-goog-meta-*` header the API binds into the
 signature must be listed here, or the preflight rejects them.
 
-Create `cors.json`:
+The policy is version-controlled at **`gcs-cors.json`** in the repo root:
 
 ```json
 [
@@ -127,12 +127,15 @@ Create `cors.json`:
 ]
 ```
 
+Apply it (run from the repo root):
+
 ```bash
-gcloud storage buckets update gs://den-bot-pdf-uploads --cors-file=cors.json
+gcloud storage buckets update gs://den-bot-pdf-uploads --cors-file=gcs-cors.json
 ```
 
-> Keep this list in sync with `required_headers` in `app/admin.py` /
-> `docs/admin-api.md`. If you add a metadata field, add the header here too.
+> Keep `gcs-cors.json`'s `responseHeader` list in sync with `required_headers`
+> in `app/admin.py` / `docs/admin-api.md`. If you add a metadata field, add the
+> header here too, and re-run the command above.
 
 ---
 

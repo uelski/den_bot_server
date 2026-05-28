@@ -1,0 +1,20 @@
+[
+  {
+    "origin": [
+      "https://bluecypher.ai",
+      "https://www.bluecypher.ai",
+      "http://localhost:5173"
+    ],
+    "method": ["PUT"],
+    "responseHeader": [
+      "Content-Type",
+      "x-goog-meta-document_id",
+      "x-goog-meta-document_title",
+      "x-goog-meta-original_filename",
+      "x-goog-meta-category",
+      "x-goog-meta-source_url",
+      "x-goog-meta-uploaded_at"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]
