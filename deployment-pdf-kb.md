@@ -271,9 +271,10 @@ verbatim → expect `200`. Confirm the object appears in the bucket.
 
 **Watch for:**
 - `503` on validate-password → `ADMIN_PASSWORD` secret missing or not readable by the runtime SA.
-- `500` "failed to generate signed url" → with the keyless-signing fix deployed this should be resolved. If it persists:
-  - *"you need a private key to sign credentials"* in logs → the deployed revision **predates the fix** (redeploy latest), since that's the pre-fix failure mode.
-  - `PERMISSION_DENIED` / `403` on `signBlob` in logs → A.3.1 isn't actually satisfied (token-creator grant or Credentials API missing). Re-verify both.
+- `500` "failed to generate signed url" → with the keyless-signing fix deployed this should be resolved. If it persists, read the logged signBlob error:
+  - *"you need a private key to sign credentials"* → the deployed revision **predates the keyless-signing fix** (redeploy latest).
+  - `ACCESS_TOKEN_SCOPE_INSUFFICIENT` → the signing token lacks the `cloud-platform` scope. The code mints a cloud-platform-scoped token for signBlob; seeing this means the revision predates *that* fix (redeploy latest). **Not** an IAM/role issue — no new permissions needed.
+  - `PERMISSION_DENIED` on `signBlob` with *"Permission iam.serviceAccounts.signBlob denied"* → this **is** a role issue: A.2's token-creator-on-self grant (or A.3.1's Credentials API) isn't actually in place. Re-verify both.
 - `403` on the PUT → `required_headers` weren't sent verbatim, the URL expired (>10 min), or CORS (Phase 0.3) is missing/mismatched.
 
 ✅ **After Track A the frontend's admin flow is fully functional.** Uploaded PDFs land in the bucket and wait for Track B.
