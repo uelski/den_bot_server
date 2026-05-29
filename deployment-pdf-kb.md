@@ -213,6 +213,39 @@ key** — so signing happens via the IAM `signBlob` API. That requires:
 
 `cloudbuild.yaml` is already updated, so just push to `main` (or **Cloud Build → Triggers → `den-bot-server-main` → Run**). The new revision picks up `ADMIN_PASSWORD` + `GCS_UPLOAD_BUCKET`.
 
+> **Must include the keyless-signing fix.** `app/admin.py`'s `_generate_signed_url`
+> now detects credentials with no private key (Cloud Run's case) and signs via
+> the IAM `signBlob` API instead. Without that code, signing 500s on Cloud Run
+> regardless of IAM — the `roles/iam.serviceAccountTokenCreator` grant only
+> matters once the code actually calls signBlob. Make sure the revision you
+> deploy contains this change (it's on `feature/features_v2`).
+
+#### A.3.1 Pre-redeploy: confirm the two signing prerequisites are live
+
+The signBlob path depends on two things you already did (Phase 0.1 + A.2) — but
+they're now **load-bearing**, so a missing one is a guaranteed 500. No new
+provisioning here; just verify:
+
+**IAM Service Account Credentials API enabled —**
+- **Console:** **APIs & Services → Enabled APIs & Services** → search "IAM Service Account Credentials API".
+- **gcloud:**
+  ```bash
+  gcloud services list --enabled \
+    --filter="config.name:iamcredentials.googleapis.com" --project=blue-cypher
+  ```
+
+**Runtime SA holds Token Creator on itself —**
+- **Console:** **IAM & Admin → Service Accounts** → the runtime SA → **Permissions** tab → confirm that same SA appears with role **Service Account Token Creator**.
+- **gcloud:**
+  ```bash
+  gcloud iam service-accounts get-iam-policy \
+    <PROJECT_NUMBER>-compute@developer.gserviceaccount.com \
+    --flatten="bindings[].members" \
+    --filter="bindings.role:roles/iam.serviceAccountTokenCreator" \
+    --format="value(bindings.members)"
+  ```
+  Expect the runtime SA's own address in the output.
+
 ### A.4 Smoke test Track A
 
 ```bash
@@ -238,7 +271,9 @@ verbatim → expect `200`. Confirm the object appears in the bucket.
 
 **Watch for:**
 - `503` on validate-password → `ADMIN_PASSWORD` secret missing or not readable by the runtime SA.
-- `500` "failed to generate signed url" with a *"you need a private key"* message → the IAM signing path isn't active. Re-check Phase 0.1 (Credentials API) + A.2 (token creator on self). If it persists, `_generate_signed_url` may need to pass `service_account_email` + `access_token` explicitly — that's a code fix in `app/admin.py`, not console.
+- `500` "failed to generate signed url" → with the keyless-signing fix deployed this should be resolved. If it persists:
+  - *"you need a private key to sign credentials"* in logs → the deployed revision **predates the fix** (redeploy latest), since that's the pre-fix failure mode.
+  - `PERMISSION_DENIED` / `403` on `signBlob` in logs → A.3.1 isn't actually satisfied (token-creator grant or Credentials API missing). Re-verify both.
 - `403` on the PUT → `required_headers` weren't sent verbatim, the URL expired (>10 min), or CORS (Phase 0.3) is missing/mismatched.
 
 ✅ **After Track A the frontend's admin flow is fully functional.** Uploaded PDFs land in the bucket and wait for Track B.

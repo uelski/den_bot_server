@@ -33,8 +33,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
+from google.auth import credentials as google_credentials
+from google.auth.transport import requests as google_auth_requests
 from google.cloud import storage
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -183,15 +185,41 @@ def _generate_signed_url(
     custom_metadata: dict[str, str],
 ) -> str:
     """Generate a v4 signed URL for PUT, binding custom metadata into
-    the signature. Mismatched headers on the PUT → 403 from GCS."""
+    the signature. Mismatched headers on the PUT → 403 from GCS.
+
+    Signing path depends on the ambient credentials:
+
+    - **Key-backed creds** (a local service-account key file) implement the
+      Signing interface → the storage library signs in-process.
+    - **No private key** (Cloud Run / GCE: ADC yields compute_engine creds
+      that hold only a bearer token) → fall back to the IAM `signBlob` API by
+      passing `service_account_email` + `access_token`. Without this, the
+      library raises "you need a private key to sign credentials" and the
+      endpoint 500s. The signBlob path requires the runtime SA to hold
+      `roles/iam.serviceAccountTokenCreator` on itself + the IAM Service
+      Account Credentials API enabled — see deployment-pdf-kb.md Phase 0.1 + A.2.
+    """
     client = storage.Client()
     blob = client.bucket(bucket_name).blob(object_path)
+
+    signing_kwargs: dict[str, str] = {}
+    credentials = client._credentials
+    if not isinstance(credentials, google_credentials.Signing):
+        # Credentials can't sign locally (Cloud Run). Refresh for a live
+        # access token, then route signing through IAM signBlob.
+        credentials.refresh(google_auth_requests.Request())
+        signing_kwargs = {
+            "service_account_email": credentials.service_account_email,
+            "access_token": credentials.token,
+        }
+
     return blob.generate_signed_url(
         version="v4",
         expiration=timedelta(minutes=SIGNED_URL_TTL_MINUTES),
         method="PUT",
         content_type="application/pdf",
         headers=_meta_headers(custom_metadata),
+        **signing_kwargs,
     )
 
 
@@ -212,7 +240,21 @@ class UploadUrlRequest(BaseModel):
     category: ValidCategory
     document_title: str = Field(..., min_length=1, max_length=300)
     original_filename: str = Field(..., min_length=1, max_length=300)
-    source_url: HttpUrl
+    # Optional: some PDFs have no canonical source URL (e.g. a local file).
+    # When omitted the x-goog-meta-source_url header is left off entirely;
+    # the worker defaults it to "" (worker/pipeline/process.py). If present
+    # it must still be a valid http(s) URL.
+    source_url: HttpUrl | None = None
+
+    @field_validator("source_url", mode="before")
+    @classmethod
+    def _blank_source_url_to_none(cls, v: object) -> object:
+        """A blank form field submits as "" — treat empty/whitespace as
+        "not provided" so it coerces to None instead of failing HttpUrl
+        validation. A non-empty invalid URL still 422s."""
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
 
 class UploadUrlResponse(BaseModel):
@@ -285,9 +327,12 @@ async def pdf_upload_url(
         "document_title": body.document_title,
         "original_filename": body.original_filename,
         "category": body.category,
-        "source_url": str(body.source_url),
         "uploaded_at": uploaded_at,
     }
+    # Only bind source_url into the signature when provided — str(None) would
+    # otherwise stamp the literal "None" into x-goog-meta-source_url.
+    if body.source_url is not None:
+        custom_metadata["source_url"] = str(body.source_url)
 
     try:
         signed_url = _generate_signed_url(bucket_name, object_path, custom_metadata)

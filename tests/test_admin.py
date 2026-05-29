@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from google.auth import credentials as google_credentials
 
 from app.admin import _reset_rate_limiter, _slugify_filename
 from app.main import app
@@ -29,7 +30,14 @@ def _env_and_rate_limiter(monkeypatch):
 @pytest.fixture(autouse=True)
 def signing_blob(monkeypatch):
     """Replace google.cloud.storage.Client. Returns the mock blob so
-    tests can assert on what got passed to generate_signed_url."""
+    tests can assert on what got passed to generate_signed_url.
+
+    By default `client._credentials` is a plain MagicMock — not a
+    `Signing` instance — which models the Cloud Run case (compute creds
+    that can't sign locally, so the code routes through IAM signBlob).
+    The mock client is reachable via `signing_blob.mock_client` for tests
+    that need to swap in key-backed (Signing) credentials.
+    """
     mock_blob = MagicMock()
     mock_blob.generate_signed_url.return_value = (
         "https://storage.googleapis.com/test-upload-bucket/"
@@ -39,9 +47,11 @@ def signing_blob(monkeypatch):
     mock_bucket.blob.return_value = mock_blob
     mock_client = MagicMock()
     mock_client.bucket.return_value = mock_bucket
+    mock_client._credentials = MagicMock()  # not Signing → IAM signBlob path
     monkeypatch.setattr(
         "app.admin.storage.Client", MagicMock(return_value=mock_client)
     )
+    mock_blob.mock_client = mock_client
     return mock_blob
 
 
@@ -155,6 +165,48 @@ def test_upload_url_bakes_metadata_into_signed_url(
     assert "x-goog-meta-uploaded_at" in bound
 
 
+def test_upload_url_signs_via_iam_when_creds_cannot_sign(
+    client: TestClient, signing_blob
+) -> None:
+    """Cloud Run case: ADC yields compute creds with no private key (the
+    fixture's default non-Signing mock). The handler must refresh them and
+    route signing through IAM signBlob by passing service_account_email +
+    access_token — otherwise generate_signed_url raises and the endpoint 500s."""
+    creds = signing_blob.mock_client._credentials
+    response = client.post(
+        "/admin/pdf-upload-url",
+        headers={"X-Admin-Password": TEST_ADMIN_PASSWORD},
+        json=_valid_body(),
+    )
+    assert response.status_code == 200
+
+    creds.refresh.assert_called_once()
+    kwargs = signing_blob.generate_signed_url.call_args.kwargs
+    assert kwargs["service_account_email"] == creds.service_account_email
+    assert kwargs["access_token"] == creds.token
+
+
+def test_upload_url_signs_in_process_with_key_backed_creds(
+    client: TestClient, signing_blob
+) -> None:
+    """Local case: a service-account key file yields Signing creds, so the
+    library signs in-process. The IAM signBlob params must NOT be passed
+    (passing an access_token would override the key-based signature)."""
+    signing_blob.mock_client._credentials = MagicMock(
+        spec=google_credentials.Signing
+    )
+    response = client.post(
+        "/admin/pdf-upload-url",
+        headers={"X-Admin-Password": TEST_ADMIN_PASSWORD},
+        json=_valid_body(),
+    )
+    assert response.status_code == 200
+
+    kwargs = signing_blob.generate_signed_url.call_args.kwargs
+    assert "service_account_email" not in kwargs
+    assert "access_token" not in kwargs
+
+
 def test_upload_url_path_encodes_category(client: TestClient) -> None:
     body = _valid_body()
     body["category"] = "budget"
@@ -240,6 +292,41 @@ def test_upload_url_rejects_invalid_source_url(client: TestClient) -> None:
         json=body,
     )
     assert response.status_code == 422
+
+
+def test_upload_url_source_url_is_optional(client: TestClient) -> None:
+    """source_url may be omitted (some PDFs have no canonical source). When
+    absent, the x-goog-meta-source_url header is left off entirely — not
+    stamped with the literal "None" — so the worker's "" default applies."""
+    body = _valid_body()
+    del body["source_url"]
+    response = client.post(
+        "/admin/pdf-upload-url",
+        headers={"X-Admin-Password": TEST_ADMIN_PASSWORD},
+        json=body,
+    )
+    assert response.status_code == 200
+    headers = response.json()["required_headers"]
+    assert "x-goog-meta-source_url" not in headers
+    # the other metadata is still bound
+    assert headers["x-goog-meta-category"] == "ordinance"
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_upload_url_blank_source_url_treated_as_omitted(
+    client: TestClient, blank: str
+) -> None:
+    """A blank form field submits as "" (not null/omitted). It should be
+    accepted and treated as no source, not 422'd as an invalid URL."""
+    body = _valid_body()
+    body["source_url"] = blank
+    response = client.post(
+        "/admin/pdf-upload-url",
+        headers={"X-Admin-Password": TEST_ADMIN_PASSWORD},
+        json=body,
+    )
+    assert response.status_code == 200
+    assert "x-goog-meta-source_url" not in response.json()["required_headers"]
 
 
 def test_upload_url_503_when_bucket_unset(

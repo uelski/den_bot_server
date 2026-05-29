@@ -100,12 +100,16 @@ Content-Type: application/json
 
 #### Field rules
 
-| Field | Type | Constraints |
-|---|---|---|
-| `category` | enum | One of: `ordinance` / `council` / `budget` / `finance` / `transparency` / `general`. Server-side allowlist; arbitrary values → 422. |
-| `document_title` | string | 1–300 chars. Used in citations like *"Denver Code of Ordinances, pages 11–14"*. |
-| `original_filename` | string | 1–300 chars. The literal file name from the picker — preserved as audit metadata; the GCS object path always normalizes to `.pdf`. |
-| `source_url` | URL | Must be a valid `http://` or `https://` URL. Used in citations and for "where did this come from" debugging. |
+| Field | Type | Required | Constraints |
+|---|---|---|---|
+| `category` | enum | **yes** | One of: `ordinance` / `council` / `budget` / `finance` / `transparency` / `general`. Server-side allowlist; arbitrary values → 422. |
+| `document_title` | string | **yes** | 1–300 chars. Used in citations like *"Denver Code of Ordinances, pages 11–14"*. |
+| `original_filename` | string | **yes** | 1–300 chars. The literal file name from the picker — preserved as audit metadata; the GCS object path always normalizes to `.pdf`. |
+| `source_url` | URL | **no** | Omit it, send `null`, or send an empty string `""` when the PDF has no canonical source — all three are accepted and treated as "no source". If a non-empty value is sent it must be a valid `http://` or `https://` URL (otherwise → 422). Used in citations and for "where did this come from" debugging. |
+
+When `source_url` is omitted, the `x-goog-meta-source_url` entry is simply
+**absent** from `required_headers` (not empty-string) — so just spread whatever
+headers come back, as always.
 
 Extra fields are rejected (`extra="forbid"` on the pydantic schema) → 422.
 
