@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+python-dotenv
+pydantic>=2.0
+
+# Ingestion pipeline deps (step B)
+google-cloud-storage         # download uploaded PDFs from GCS
+pymupdf                      # PDF → text + per-page positions
+langchain-text-splitters     # RecursiveCharacterTextSplitter for parent/child
+langchain-google-genai       # dense embedding model wrapper (matches main app)
+qdrant-client                # direct client for collection mgmt + upsert
+fastembed                    # BM25 sparse embeddings (hybrid retrieval)
+tiktoken                     # token counting for chunker

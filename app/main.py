@@ -24,6 +24,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
+from app.admin import router as admin_router
 from app.feedback import router as feedback_router
 from app.graph.memory import build_checkpointer
 from app.graph.orchestrator import build_graph, graph as stateless_graph
@@ -66,6 +67,7 @@ app.add_middleware(
 )
 
 app.include_router(feedback_router)
+app.include_router(admin_router)
 
 
 class QueryBody(BaseModel):
