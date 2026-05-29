@@ -33,6 +33,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
+import google.auth
 from google.auth import credentials as google_credentials
 from google.auth.transport import requests as google_auth_requests
 from google.cloud import storage
@@ -198,19 +199,27 @@ def _generate_signed_url(
       endpoint 500s. The signBlob path requires the runtime SA to hold
       `roles/iam.serviceAccountTokenCreator` on itself + the IAM Service
       Account Credentials API enabled — see deployment-pdf-kb.md Phase 0.1 + A.2.
+
+    The token used for signBlob must carry the **cloud-platform** scope. The
+    storage client narrows its own token to `devstorage`, which `signBlob`
+    rejects with `ACCESS_TOKEN_SCOPE_INSUFFICIENT` — so we mint a separate
+    cloud-platform-scoped token rather than reusing `client._credentials`.
     """
     client = storage.Client()
     blob = client.bucket(bucket_name).blob(object_path)
 
     signing_kwargs: dict[str, str] = {}
-    credentials = client._credentials
-    if not isinstance(credentials, google_credentials.Signing):
-        # Credentials can't sign locally (Cloud Run). Refresh for a live
-        # access token, then route signing through IAM signBlob.
-        credentials.refresh(google_auth_requests.Request())
+    if not isinstance(client._credentials, google_credentials.Signing):
+        # Credentials can't sign locally (Cloud Run). Sign via IAM signBlob
+        # using a cloud-platform-scoped token (the storage client's token is
+        # devstorage-scoped → ACCESS_TOKEN_SCOPE_INSUFFICIENT).
+        signer, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        signer.refresh(google_auth_requests.Request())
         signing_kwargs = {
-            "service_account_email": credentials.service_account_email,
-            "access_token": credentials.token,
+            "service_account_email": signer.service_account_email,
+            "access_token": signer.token,
         }
 
     return blob.generate_signed_url(

@@ -51,7 +51,20 @@ def signing_blob(monkeypatch):
     monkeypatch.setattr(
         "app.admin.storage.Client", MagicMock(return_value=mock_client)
     )
+
+    # The IAM signBlob fallback mints a cloud-platform-scoped token via
+    # google.auth.default — mock it so the signBlob path is exercised without
+    # real ADC. (signBlob fails with ACCESS_TOKEN_SCOPE_INSUFFICIENT if this
+    # token is devstorage-scoped, hence the dedicated cloud-platform fetch.)
+    mock_signer = MagicMock()
+    mock_signer.service_account_email = "rt-sa@blue-cypher.iam.gserviceaccount.com"
+    mock_signer.token = "ya29.fake-cloud-platform-token"
+    mock_auth_default = MagicMock(return_value=(mock_signer, "blue-cypher"))
+    monkeypatch.setattr("app.admin.google.auth.default", mock_auth_default)
+
     mock_blob.mock_client = mock_client
+    mock_blob.mock_signer = mock_signer
+    mock_blob.mock_auth_default = mock_auth_default
     return mock_blob
 
 
@@ -169,10 +182,9 @@ def test_upload_url_signs_via_iam_when_creds_cannot_sign(
     client: TestClient, signing_blob
 ) -> None:
     """Cloud Run case: ADC yields compute creds with no private key (the
-    fixture's default non-Signing mock). The handler must refresh them and
-    route signing through IAM signBlob by passing service_account_email +
-    access_token — otherwise generate_signed_url raises and the endpoint 500s."""
-    creds = signing_blob.mock_client._credentials
+    fixture's default non-Signing mock). The handler must sign through IAM
+    signBlob, using a cloud-platform-scoped token from google.auth.default —
+    a devstorage-scoped token yields ACCESS_TOKEN_SCOPE_INSUFFICIENT."""
     response = client.post(
         "/admin/pdf-upload-url",
         headers={"X-Admin-Password": TEST_ADMIN_PASSWORD},
@@ -180,18 +192,23 @@ def test_upload_url_signs_via_iam_when_creds_cannot_sign(
     )
     assert response.status_code == 200
 
-    creds.refresh.assert_called_once()
+    # the signing token must be requested with the cloud-platform scope
+    signing_blob.mock_auth_default.assert_called_once()
+    scopes = signing_blob.mock_auth_default.call_args.kwargs["scopes"]
+    assert "https://www.googleapis.com/auth/cloud-platform" in scopes
+    signing_blob.mock_signer.refresh.assert_called_once()
+
     kwargs = signing_blob.generate_signed_url.call_args.kwargs
-    assert kwargs["service_account_email"] == creds.service_account_email
-    assert kwargs["access_token"] == creds.token
+    assert kwargs["service_account_email"] == signing_blob.mock_signer.service_account_email
+    assert kwargs["access_token"] == signing_blob.mock_signer.token
 
 
 def test_upload_url_signs_in_process_with_key_backed_creds(
     client: TestClient, signing_blob
 ) -> None:
     """Local case: a service-account key file yields Signing creds, so the
-    library signs in-process. The IAM signBlob params must NOT be passed
-    (passing an access_token would override the key-based signature)."""
+    library signs in-process. No IAM signBlob fallback (no scoped-token fetch,
+    no service_account_email/access_token passed)."""
     signing_blob.mock_client._credentials = MagicMock(
         spec=google_credentials.Signing
     )
@@ -202,6 +219,7 @@ def test_upload_url_signs_in_process_with_key_backed_creds(
     )
     assert response.status_code == 200
 
+    signing_blob.mock_auth_default.assert_not_called()
     kwargs = signing_blob.generate_signed_url.call_args.kwargs
     assert "service_account_email" not in kwargs
     assert "access_token" not in kwargs
