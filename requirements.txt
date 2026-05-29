@@ -17,6 +17,8 @@ pandas                     # GTFS file joins (scripts/ingest_rtd_gtfs.py only â€
 gtfs-realtime-bindings     # protobuf parser for app/tools/rtd_alerts.py
 tavily-python>=0.5.0       # AsyncTavilyClient backing the search_denver_gov tool
 langgraph-checkpoint-redis>=0.4.0  # AsyncRedisSaver for multi-turn conversation memory
+google-cloud-storage       # v4 signed-URL generation for the /admin PDF upload flow (app/admin.py)
+google-auth                # IAM signBlob keyless-signing path in app/admin.py (imported directly)
 dotenv
 fastembed
 
