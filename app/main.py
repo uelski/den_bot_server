@@ -88,6 +88,32 @@ def build_sources_payload(docs) -> list[dict]:
     seen: set[tuple] = set()
     sources: list[dict] = []
     for d in docs:
+        # PDF knowledge-base docs cite by document, not by GIS service. They
+        # carry no base_url, so they'd be dropped by the catalog path below —
+        # handle them first. Dedup by document_id (many chunks, one document).
+        if d.metadata.get("source_collection") == "knowledge_base":
+            document_id = d.metadata.get("document_id")
+            kb_key = ("knowledge_base", document_id)
+            if kb_key in seen:
+                continue
+            seen.add(kb_key)
+            entry = {
+                "document_title": d.metadata.get("document_title")
+                or d.metadata.get("original_filename", "Uploaded document"),
+                "source_collection": "knowledge_base",
+            }
+            if d.metadata.get("source_url"):
+                entry["source_url"] = d.metadata["source_url"]
+            start = d.metadata.get("parent_start_page")
+            end = d.metadata.get("parent_end_page")
+            if start:
+                entry["page_start"] = start
+                entry["page_end"] = end or start
+            if d.metadata.get("category"):
+                entry["category"] = d.metadata["category"]
+            sources.append(entry)
+            continue
+
         if not d.metadata.get("base_url"):
             continue
         service_name = d.metadata.get("service_name")
@@ -495,8 +521,10 @@ async def query_endpoint(body: QueryBody, request: Request):
                         payload = json.dumps({"text": chunk.content})
                         yield f"event: token\ndata: {payload}\n\n"
 
-                # Retriever finished — emit sources + map_viewer
-                elif event_type == "on_chain_end" and node == "retriever":
+                # Reranker finished — emit sources + map_viewer from the FINAL
+                # merged/reranked doc set (retriever now returns an unranked
+                # superset across both collections; reranker produces the top-5).
+                elif event_type == "on_chain_end" and node == "reranker":
                     output = event.get("data", {}).get("output", {})
                     docs = output.get("retrieved_docs", []) if output else []
 

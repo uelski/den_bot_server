@@ -46,6 +46,8 @@ State → Retrieve → Grade → [Generate | Scrape → Generate]
 - GEMINI_API_KEY
 - QDRANT_URL (default: http://localhost:6333)
 - QDRANT_COLLECTION_NAME (default: denver_gis_catalog)
+- QDRANT_KB_COLLECTION_NAME (default: denver_pdf_knowledge_base) — PDF knowledge base; searched alongside the catalog by the retriever
+- COHERE_API_KEY — required by the reranker node (rerank-english-v3.0) that merges catalog + PDF KB hits; fails open to fused order if unset
 - REDIS_URL (default: redis://localhost:6379) — backs the LangGraph checkpointer for multi-turn memory; unset to run single-turn
 - TAVILY_API_KEY — required for the search_denver_gov agent tool
 - RESEND_API_KEY — required for POST /feedback to deliver mail (without it the endpoint 503s)

@@ -8,6 +8,7 @@ from app.graph.nodes.condenser import condenser
 from app.graph.nodes.generator import generator
 from app.graph.nodes.grader import grader
 from app.graph.nodes.intent_router import intent_router
+from app.graph.nodes.reranker import reranker
 from app.graph.nodes.retriever import retriever
 from app.graph.nodes.rewriter import rewriter
 from app.graph.nodes.router import main_router
@@ -57,6 +58,7 @@ def build_graph(checkpointer: Any | None = None):
     builder.add_node("main_router", main_router)
     builder.add_node("condenser", condenser)
     builder.add_node("retriever", retriever)
+    builder.add_node("reranker", reranker)
     builder.add_node("grader", grader)
     builder.add_node("intent_router", intent_router)
     builder.add_node("rewriter", rewriter)
@@ -76,7 +78,9 @@ def build_graph(checkpointer: Any | None = None):
         },
     )
     builder.add_edge("condenser", "retriever")
-    builder.add_edge("retriever", "grader")
+    # retriever fans out to both collections; reranker merges before grading.
+    builder.add_edge("retriever", "reranker")
+    builder.add_edge("reranker", "grader")
     builder.add_edge("tool_agent", "generate")
 
     # After grader: retry loop or proceed to intent classification

@@ -91,6 +91,41 @@ class TestBuildSourcesPayload:
         assert len(result) == 1
         assert result[0]["service_name"] == "Denver Parks"
 
+    def test_kb_doc_emits_document_citation(self, kb_doc_factory):
+        doc = kb_doc_factory(
+            document_id="ord.pdf",
+            document_title="Denver Code of Ordinances",
+            source_url="https://denvergov.org/code.pdf",
+            parent_start_page=11,
+            parent_end_page=14,
+            category="ordinance",
+        )
+        result = build_sources_payload([doc])
+        assert len(result) == 1
+        entry = result[0]
+        assert entry["source_collection"] == "knowledge_base"
+        assert entry["document_title"] == "Denver Code of Ordinances"
+        assert entry["source_url"] == "https://denvergov.org/code.pdf"
+        assert entry["page_start"] == 11 and entry["page_end"] == 14
+        assert entry["category"] == "ordinance"
+        # KB docs carry no base_url; must not be dropped by the catalog path.
+        assert "base_url" not in entry
+
+    def test_kb_chunks_from_same_document_dedup_by_document_id(self, kb_doc_factory):
+        docs = [
+            kb_doc_factory(document_id="ord.pdf", parent_index=i, child_index=i)
+            for i in range(4)
+        ]
+        result = build_sources_payload(docs)
+        assert len(result) == 1
+
+    def test_mixed_catalog_and_kb_both_emit(self, catalog_doc, kb_doc_factory):
+        docs = [catalog_doc, kb_doc_factory(document_id="ord.pdf")]
+        result = build_sources_payload(docs)
+        assert len(result) == 2
+        kinds = {e.get("source_collection") for e in result}
+        assert "knowledge_base" in kinds
+
 
 class TestBuildMapViewerLinks:
     def test_empty_docs_returns_empty(self):
