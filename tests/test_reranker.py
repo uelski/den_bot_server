@@ -6,9 +6,19 @@ from unittest.mock import MagicMock, patch
 from app.graph.nodes import reranker as reranker_module
 
 
-def _fake_rerank_result(order):
-    """Build a Cohere-like rerank response that reorders by the given indices."""
-    return SimpleNamespace(results=[SimpleNamespace(index=i) for i in order])
+def _fake_rerank_result(order, scores=None):
+    """Build a Cohere-like rerank response that reorders by the given indices.
+
+    Default scores are high (0.9) so they clear the relevance threshold; pass
+    explicit `scores` to exercise the score-filter.
+    """
+    if scores is None:
+        scores = [0.9] * len(order)
+    return SimpleNamespace(
+        results=[
+            SimpleNamespace(index=i, relevance_score=s) for i, s in zip(order, scores)
+        ]
+    )
 
 
 class TestDedupeKbSiblings:
@@ -96,6 +106,39 @@ class TestRerankerNode:
                 {"query": "q", "retrieved_docs": [catalog_doc]}
             )
         assert result["retrieved_docs"] == [catalog_doc]
+
+    def test_drops_docs_below_score_threshold(self, kb_doc_factory, catalog_doc):
+        """A strong KB hit survives; a weakly-related catalog service is cut —
+        the exact 'irrelevant sources' bug this guards against."""
+        reranker_module._get_cohere_client.cache_clear()
+        kb = kb_doc_factory(document_id="budget.pdf")
+        docs = [catalog_doc, kb]
+
+        mock_client = MagicMock()
+        # rerank order [1, 0]: kb strong (0.82), catalog weak (0.04)
+        mock_client.rerank.return_value = _fake_rerank_result([1, 0], [0.82, 0.04])
+
+        with patch.object(
+            reranker_module, "_get_cohere_client", return_value=mock_client
+        ):
+            result = reranker_module.reranker(
+                {"query": "city budget", "retrieved_docs": docs}
+            )
+
+        out = result["retrieved_docs"]
+        assert len(out) == 1
+        assert out[0].metadata["document_id"] == "budget.pdf"
+
+    def test_unscored_docs_pass_when_reranking_unavailable(
+        self, kb_doc_factory, catalog_doc
+    ):
+        """Fail-open: no scores stamped → threshold can't apply → keep all."""
+        reranker_module._get_cohere_client.cache_clear()
+        with patch.object(reranker_module, "_get_cohere_client", return_value=None):
+            result = reranker_module.reranker(
+                {"query": "q", "retrieved_docs": [catalog_doc, kb_doc_factory(document_id="d1")]}
+            )
+        assert len(result["retrieved_docs"]) == 2
 
     def test_truncates_to_top_n(self, kb_doc_factory):
         reranker_module._get_cohere_client.cache_clear()
