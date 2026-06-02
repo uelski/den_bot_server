@@ -121,6 +121,49 @@ def _rerank_order(query: str, docs: list[Document]) -> list[Document]:
         return docs
 
 
+def _emit_observability(
+    *, candidates: int, after_dedupe: int, kept: int, returned: list[Document]
+) -> None:
+    """Attach a compact rerank summary to the current LangSmith run.
+
+    Makes the scores queryable/aggregatable in the UI (filter by top_score,
+    chart kept/candidates over time, see which collection wins) instead of
+    being buried in the serialized Document outputs. No-ops cleanly when
+    tracing is off or langsmith isn't importable.
+    """
+    try:
+        from langsmith import get_current_run_tree
+
+        run = get_current_run_tree()
+        if run is None:
+            return
+        scores = [
+            round(d.metadata["rerank_score"], 4)
+            for d in returned
+            if d.metadata.get("rerank_score") is not None
+        ]
+        by_collection: dict[str, int] = {}
+        for d in returned:
+            coll = d.metadata.get("source_collection", "unknown")
+            by_collection[coll] = by_collection.get(coll, 0) + 1
+        run.add_metadata(
+            {
+                "rerank_threshold": RERANK_SCORE_THRESHOLD,
+                "rerank_candidates": candidates,
+                "rerank_after_dedupe": after_dedupe,
+                "rerank_kept": kept,
+                "rerank_dropped": after_dedupe - kept,
+                "rerank_returned": len(returned),
+                "rerank_scores": scores,
+                "rerank_top_score": scores[0] if scores else None,
+                "rerank_kept_by_collection": by_collection,
+            }
+        )
+    except Exception:
+        # Observability must never break retrieval.
+        logger.debug("could not attach rerank metadata to run", exc_info=True)
+
+
 def _filter_by_score(docs: list[Document]) -> list[Document]:
     """Drop docs the reranker scored below the relevance threshold.
 
@@ -158,5 +201,11 @@ def reranker(state: AgentState) -> dict:
             for d in top
             if d.metadata.get("rerank_score") is not None
         ],
+    )
+    _emit_observability(
+        candidates=len(docs),
+        after_dedupe=len(deduped),
+        kept=len(relevant),
+        returned=expanded,
     )
     return {"retrieved_docs": expanded}

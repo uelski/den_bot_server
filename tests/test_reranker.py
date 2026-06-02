@@ -140,6 +140,43 @@ class TestRerankerNode:
             )
         assert len(result["retrieved_docs"]) == 2
 
+    def test_attaches_rerank_metadata_to_langsmith_run(
+        self, kb_doc_factory, catalog_doc
+    ):
+        reranker_module._get_cohere_client.cache_clear()
+        kb = kb_doc_factory(document_id="budget.pdf")
+        mock_client = MagicMock()
+        mock_client.rerank.return_value = _fake_rerank_result([1, 0], [0.82, 0.04])
+
+        mock_run = MagicMock()
+        with patch.object(
+            reranker_module, "_get_cohere_client", return_value=mock_client
+        ), patch("langsmith.get_current_run_tree", return_value=mock_run):
+            reranker_module.reranker(
+                {"query": "city budget", "retrieved_docs": [catalog_doc, kb]}
+            )
+
+        mock_run.add_metadata.assert_called_once()
+        meta = mock_run.add_metadata.call_args[0][0]
+        assert meta["rerank_candidates"] == 2
+        assert meta["rerank_kept"] == 1  # catalog (0.04) dropped
+        assert meta["rerank_dropped"] == 1
+        assert meta["rerank_top_score"] == 0.82
+        assert meta["rerank_kept_by_collection"] == {"knowledge_base": 1}
+
+    def test_observability_failure_never_breaks_reranking(
+        self, kb_doc_factory, catalog_doc
+    ):
+        reranker_module._get_cohere_client.cache_clear()
+        with patch.object(
+            reranker_module, "_get_cohere_client", return_value=None
+        ), patch("langsmith.get_current_run_tree", side_effect=RuntimeError("boom")):
+            result = reranker_module.reranker(
+                {"query": "q", "retrieved_docs": [catalog_doc]}
+            )
+        # Retrieval still returns despite the tracing call blowing up.
+        assert result["retrieved_docs"] == [catalog_doc]
+
     def test_truncates_to_top_n(self, kb_doc_factory):
         reranker_module._get_cohere_client.cache_clear()
         # 7 distinct parents → after dedupe still 7 → should trim to TOP_N (5).
