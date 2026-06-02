@@ -6,9 +6,19 @@ from unittest.mock import MagicMock, patch
 from app.graph.nodes import reranker as reranker_module
 
 
-def _fake_rerank_result(order):
-    """Build a Cohere-like rerank response that reorders by the given indices."""
-    return SimpleNamespace(results=[SimpleNamespace(index=i) for i in order])
+def _fake_rerank_result(order, scores=None):
+    """Build a Cohere-like rerank response that reorders by the given indices.
+
+    Default scores are high (0.9) so they clear the relevance threshold; pass
+    explicit `scores` to exercise the score-filter.
+    """
+    if scores is None:
+        scores = [0.9] * len(order)
+    return SimpleNamespace(
+        results=[
+            SimpleNamespace(index=i, relevance_score=s) for i, s in zip(order, scores)
+        ]
+    )
 
 
 class TestDedupeKbSiblings:
@@ -95,6 +105,76 @@ class TestRerankerNode:
             result = reranker_module.reranker(
                 {"query": "q", "retrieved_docs": [catalog_doc]}
             )
+        assert result["retrieved_docs"] == [catalog_doc]
+
+    def test_drops_docs_below_score_threshold(self, kb_doc_factory, catalog_doc):
+        """A strong KB hit survives; a weakly-related catalog service is cut —
+        the exact 'irrelevant sources' bug this guards against."""
+        reranker_module._get_cohere_client.cache_clear()
+        kb = kb_doc_factory(document_id="budget.pdf")
+        docs = [catalog_doc, kb]
+
+        mock_client = MagicMock()
+        # rerank order [1, 0]: kb strong (0.82), catalog weak (0.04)
+        mock_client.rerank.return_value = _fake_rerank_result([1, 0], [0.82, 0.04])
+
+        with patch.object(
+            reranker_module, "_get_cohere_client", return_value=mock_client
+        ):
+            result = reranker_module.reranker(
+                {"query": "city budget", "retrieved_docs": docs}
+            )
+
+        out = result["retrieved_docs"]
+        assert len(out) == 1
+        assert out[0].metadata["document_id"] == "budget.pdf"
+
+    def test_unscored_docs_pass_when_reranking_unavailable(
+        self, kb_doc_factory, catalog_doc
+    ):
+        """Fail-open: no scores stamped → threshold can't apply → keep all."""
+        reranker_module._get_cohere_client.cache_clear()
+        with patch.object(reranker_module, "_get_cohere_client", return_value=None):
+            result = reranker_module.reranker(
+                {"query": "q", "retrieved_docs": [catalog_doc, kb_doc_factory(document_id="d1")]}
+            )
+        assert len(result["retrieved_docs"]) == 2
+
+    def test_attaches_rerank_metadata_to_langsmith_run(
+        self, kb_doc_factory, catalog_doc
+    ):
+        reranker_module._get_cohere_client.cache_clear()
+        kb = kb_doc_factory(document_id="budget.pdf")
+        mock_client = MagicMock()
+        mock_client.rerank.return_value = _fake_rerank_result([1, 0], [0.82, 0.04])
+
+        mock_run = MagicMock()
+        with patch.object(
+            reranker_module, "_get_cohere_client", return_value=mock_client
+        ), patch("langsmith.get_current_run_tree", return_value=mock_run):
+            reranker_module.reranker(
+                {"query": "city budget", "retrieved_docs": [catalog_doc, kb]}
+            )
+
+        mock_run.add_metadata.assert_called_once()
+        meta = mock_run.add_metadata.call_args[0][0]
+        assert meta["rerank_candidates"] == 2
+        assert meta["rerank_kept"] == 1  # catalog (0.04) dropped
+        assert meta["rerank_dropped"] == 1
+        assert meta["rerank_top_score"] == 0.82
+        assert meta["rerank_kept_by_collection"] == {"knowledge_base": 1}
+
+    def test_observability_failure_never_breaks_reranking(
+        self, kb_doc_factory, catalog_doc
+    ):
+        reranker_module._get_cohere_client.cache_clear()
+        with patch.object(
+            reranker_module, "_get_cohere_client", return_value=None
+        ), patch("langsmith.get_current_run_tree", side_effect=RuntimeError("boom")):
+            result = reranker_module.reranker(
+                {"query": "q", "retrieved_docs": [catalog_doc]}
+            )
+        # Retrieval still returns despite the tracing call blowing up.
         assert result["retrieved_docs"] == [catalog_doc]
 
     def test_truncates_to_top_n(self, kb_doc_factory):

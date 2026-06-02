@@ -67,7 +67,7 @@ steps:
       # /admin/pdf-upload-url endpoint. ADMIN_PASSWORD lives in Secret Manager
       # (it's the shared admin secret). Both unset → /admin/* returns 503.
       # See deployment-pdf-kb.md Track A.
-      - --set-env-vars=^##^QDRANT_COLLECTION_NAME=denver_gis_catalog##GEMINI_MODEL=gemini-2.5-flash##LANGCHAIN_TRACING_V2=true##LANGCHAIN_PROJECT=blue-cypher-prod##ALLOWED_ORIGINS=https://bluecypher.ai,https://www.bluecypher.ai##MEMORY_HISTORY_TURNS=8##MEMORY_TTL_MINUTES=43200##RTD_REALTIME_CACHE_TTL_SECONDS=30##TAVILY_CACHE_TTL_SECONDS=86400##RTD_USER_AGENT=blue-cypher-denver-rag (sam.vburgh@gmail.com)##GCS_UPLOAD_BUCKET=den-bot-pdf-uploads
+      - --set-env-vars=^##^QDRANT_COLLECTION_NAME=denver_gis_catalog##GEMINI_MODEL=gemini-2.5-flash##LANGCHAIN_TRACING_V2=true##LANGCHAIN_PROJECT=blue-cypher-prod##ALLOWED_ORIGINS=https://bluecypher.ai,https://www.bluecypher.ai##MEMORY_HISTORY_TURNS=8##MEMORY_TTL_MINUTES=43200##RTD_REALTIME_CACHE_TTL_SECONDS=30##TAVILY_CACHE_TTL_SECONDS=86400##RTD_USER_AGENT=blue-cypher-denver-rag (sam.vburgh@gmail.com)##GCS_UPLOAD_BUCKET=den-bot-pdf-uploads##RERANK_SCORE_THRESHOLD=0.3
       - --set-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest,QDRANT_URL=QDRANT_URL:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest,REDIS_URL=REDIS_URL:latest,RESEND_API_KEY=RESEND_API_KEY:latest,FEEDBACK_TO_EMAIL=FEEDBACK_TO_EMAIL:latest,FEEDBACK_FROM_EMAIL=FEEDBACK_FROM_EMAIL:latest,LANGCHAIN_API_KEY=LANGCHAIN_API_KEY:latest,TAVILY_API_KEY=TAVILY_API_KEY:latest,ADMIN_PASSWORD=ADMIN_PASSWORD:latest,COHERE_API_KEY=COHERE_API_KEY:latest
 
 images:
