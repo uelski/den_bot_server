@@ -51,6 +51,36 @@ class TestFormatDocsNeighborhood:
         assert "(Housing)" in parts[1]
 
 
+class TestFormatDocsKnowledgeBase:
+    def test_kb_doc_header_uses_title_and_page_range(self, kb_doc_factory):
+        # By the generator stage the reranker has already expanded page_content
+        # to the parent text; _format_docs just renders whatever page_content is.
+        doc = kb_doc_factory(
+            document_id="ord.pdf",
+            document_title="Denver Code of Ordinances",
+            parent_start_page=11,
+            parent_end_page=14,
+            child_text="the parent body the model reasoned over",
+        )
+        result = _format_docs([doc])
+        assert result.startswith("[Denver Code of Ordinances, pages 11–14]")
+        assert "the parent body the model reasoned over" in result
+
+    def test_kb_doc_single_page_when_range_collapses(self, kb_doc_factory):
+        doc = kb_doc_factory(
+            document_id="x.pdf", parent_start_page=7, parent_end_page=7
+        )
+        result = _format_docs([doc])
+        assert "page 7]" in result
+        assert "pages" not in result
+
+    def test_kb_doc_falls_back_to_filename_when_no_title(self, kb_doc_factory):
+        doc = kb_doc_factory(document_id="x.pdf", document_title="")
+        doc.metadata["original_filename"] = "budget2025.pdf"
+        result = _format_docs([doc])
+        assert "[budget2025.pdf" in result
+
+
 class TestFormatDocsStructure:
     def test_docs_separated_by_hr(self, catalog_doc, make_doc):
         second = make_doc(

@@ -1,56 +1,53 @@
-"""Unit tests for the retriever node."""
+"""Unit tests for the retriever node (async, dual-collection fan-out)."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.graph.nodes import retriever as retriever_module
 
 
 class TestRetriever:
-    def test_calls_similarity_search_with_query_and_top_k(self, catalog_doc):
-        mock_store = MagicMock()
-        mock_store.similarity_search.return_value = [catalog_doc]
-
-        # Clear the lru_cache so our patch takes effect
-        retriever_module._get_vector_store.cache_clear()
+    async def test_merges_catalog_and_kb_results(self, catalog_doc, kb_doc_factory):
+        kb_doc = kb_doc_factory(document_id="ordinances.pdf")
 
         with patch.object(
-            retriever_module, "_get_vector_store", return_value=mock_store
-        ):
-            result = retriever_module.retriever({"query": "parks in denver"})
+            retriever_module, "_search_catalog",
+            new=AsyncMock(return_value=[catalog_doc]),
+        ), patch.object(
+            retriever_module, "search_kb", return_value=[kb_doc]
+        ) as mock_kb:
+            result = await retriever_module.retriever({"query": "zoning rules"})
 
-        mock_store.similarity_search.assert_called_once_with(
-            "parks in denver", k=retriever_module.TOP_K
-        )
-        assert result == {"retrieved_docs": [catalog_doc]}
+        docs = result["retrieved_docs"]
+        assert docs == [catalog_doc, kb_doc]
+        # KB search runs via asyncio.to_thread with the query + candidate pool size.
+        mock_kb.assert_called_once_with("zoning rules", retriever_module.CANDIDATE_K)
 
-    def test_returns_empty_list_when_store_returns_nothing(self):
-        mock_store = MagicMock()
-        mock_store.similarity_search.return_value = []
-        retriever_module._get_vector_store.cache_clear()
-
+    async def test_prefers_search_query_over_literal_query(self, catalog_doc):
         with patch.object(
-            retriever_module, "_get_vector_store", return_value=mock_store
-        ):
-            result = retriever_module.retriever({"query": "zzz nothing matches"})
+            retriever_module, "_search_catalog",
+            new=AsyncMock(return_value=[catalog_doc]),
+        ) as mock_catalog, patch.object(
+            retriever_module, "search_kb", return_value=[]
+        ) as mock_kb:
+            await retriever_module.retriever(
+                {"query": "literal", "search_query": "standalone rewrite"}
+            )
+
+        mock_catalog.assert_awaited_once_with("standalone rewrite")
+        mock_kb.assert_called_once_with("standalone rewrite", retriever_module.CANDIDATE_K)
+
+    async def test_returns_empty_when_both_collections_empty(self):
+        with patch.object(
+            retriever_module, "_search_catalog", new=AsyncMock(return_value=[])
+        ), patch.object(retriever_module, "search_kb", return_value=[]):
+            result = await retriever_module.retriever({"query": "zzz no match"})
 
         assert result == {"retrieved_docs": []}
 
-    def test_passes_through_metadata_intact(
-        self, catalog_doc, neighborhood_doc_factory
-    ):
-        """The retriever must not mutate docs — metadata and page_content flow through."""
-        nbhd = neighborhood_doc_factory("Capitol Hill", "population")
-        mock_store = MagicMock()
-        mock_store.similarity_search.return_value = [catalog_doc, nbhd]
-        retriever_module._get_vector_store.cache_clear()
 
-        with patch.object(
-            retriever_module, "_get_vector_store", return_value=mock_store
-        ):
-            result = retriever_module.retriever({"query": "demographics"})
-
-        docs = result["retrieved_docs"]
-        assert len(docs) == 2
-        assert docs[1].metadata["doc_type"] == "neighborhood_demographics"
-        assert docs[1].metadata["neighborhood_name"] == "Capitol Hill"
-        assert docs[0].metadata["has_layers"] is True
+class TestTagCatalog:
+    def test_stamps_provenance_without_clobbering(self, make_doc):
+        plain = make_doc(service_name="Parks")
+        already = make_doc(service_name="Other", source_collection="catalog")
+        tagged = retriever_module._tag_catalog([plain, already])
+        assert all(d.metadata["source_collection"] == "catalog" for d in tagged)

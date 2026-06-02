@@ -1,0 +1,91 @@
+# Cloud Build pipeline — PDF ingestion worker (den-bot-worker).
+# Steps: build container -> push to Artifact Registry -> deploy to Cloud Run.
+#
+# Separate from cloudbuild.yaml (the app service). This builds the worker/
+# Dockerfile against the REPO ROOT as build context (the Dockerfile does
+# `COPY worker/ ...`). Wire a second Cloud Build trigger to this file —
+# see deployment-pdf-kb.md Track B (B.0 option b).
+#
+# The worker is PRIVATE (--no-allow-unauthenticated): only the Pub/Sub push
+# SA (den-bot-pubsub-push) may invoke /pubsub/pdf-ingest. See B.5.
+#
+# Resolved variables:
+#   $PROJECT_ID    = blue-cypher              (Cloud Build built-in)
+#   $_REGION       = us-east4                 (user-substitution, defaulted below)
+#   $_REPO         = den-bot                  (Artifact Registry repo — shared with the app)
+#   $_IMAGE        = den-bot-worker           (image name)
+#   $_SERVICE      = den-bot-worker           (Cloud Run service)
+#   $_TAG          = latest                   (immutable image tag; see note)
+#
+# $_TAG defaults to "latest" so manual bootstrap works as-is:
+#   gcloud builds submit --config cloudbuild.worker.yaml --project=blue-cypher .
+# NOTE: $COMMIT_SHA is populated ONLY on trigger builds — it's empty on a
+# manual `builds submit`, which would produce an invalid "image:" (empty tag).
+# So we use the user-defined $_TAG instead. For a commit-pinned manual build:
+#   --substitutions=_TAG=$(git rev-parse --short HEAD)
+# On the CI trigger (B.0 option b), set the substitution _TAG = $COMMIT_SHA so
+# each revision is pinned to its commit.
+
+substitutions:
+  _REGION: us-east4
+  _REPO: den-bot
+  _IMAGE: den-bot-worker
+  _SERVICE: den-bot-worker
+  _TAG: latest
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - worker/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${_TAG}
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest
+      # Build context is the repo root (worker/Dockerfile COPYs worker/).
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${_TAG}
+      - --region=${_REGION}
+      - --platform=managed
+      # PRIVATE: only the Pub/Sub push SA may invoke. Never expose publicly.
+      - --no-allow-unauthenticated
+      # Keep the HTTP timeout >= the Pub/Sub push ack deadline (B.5: 600s).
+      - --timeout=600s
+      # pymupdf parsing + 3072-dim embeddings are memory-heavy; bump on OOM.
+      - --memory=2Gi
+      - --cpu=1
+      - --min-instances=0
+      - --max-instances=5
+      # Ingestion is CPU/memory-bound — keep concurrency low.
+      - --concurrency=4
+      # QDRANT_KB_COLLECTION_NAME defaults to denver_pdf_knowledge_base in code
+      # (worker/pipeline/qdrant_writer.py); set explicitly for clarity.
+      - --set-env-vars=QDRANT_KB_COLLECTION_NAME=denver_pdf_knowledge_base
+      # GEMINI_API_KEY: langchain-google-genai reads it from env (same as the
+      # app). QDRANT_URL/QDRANT_API_KEY: writes to the same Qdrant cluster.
+      - --set-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest,QDRANT_URL=QDRANT_URL:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest
+
+images:
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${_TAG}
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8

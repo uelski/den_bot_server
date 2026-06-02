@@ -54,6 +54,48 @@ def catalog_doc(make_doc):
 
 
 @pytest.fixture
+def kb_doc_factory():
+    """Factory for PDF knowledge-base child Documents (flat KB payload shape).
+
+    Mirrors what app/retrieval/kb.py produces: page_content is the child_text,
+    parent_text + page ranges + provenance ride in metadata. base_url is
+    intentionally absent — KB docs cite by document, not GIS service.
+    """
+
+    def _factory(
+        *,
+        document_id: str,
+        parent_index: int = 0,
+        child_index: int = 0,
+        document_title: str = "Denver Code of Ordinances",
+        source_url: str | None = "https://denvergov.org/code.pdf",
+        category: str = "ordinance",
+        parent_text: str = "full parent chunk text",
+        child_text: str = "child chunk text",
+        parent_start_page: int = 11,
+        parent_end_page: int = 14,
+    ) -> Document:
+        return Document(
+            page_content=child_text,
+            metadata={
+                "source_collection": "knowledge_base",
+                "document_id": document_id,
+                "document_title": document_title,
+                "source_url": source_url,
+                "category": category,
+                "child_index": child_index,
+                "child_text": child_text,
+                "parent_index": parent_index,
+                "parent_text": parent_text,
+                "parent_start_page": parent_start_page,
+                "parent_end_page": parent_end_page,
+            },
+        )
+
+    return _factory
+
+
+@pytest.fixture
 def neighborhood_doc_factory(make_doc):
     """Factory for neighborhood_demographics-style retrieved Documents."""
 

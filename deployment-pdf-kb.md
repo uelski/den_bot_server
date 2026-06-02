@@ -283,59 +283,63 @@ verbatim → expect `200`. Confirm the object appears in the bucket.
 
 ## Track B — Worker ingestion (Pub/Sub + new Cloud Run service)
 
-### B.0 Prerequisite — worker build config (code task)
+### B.0 Worker build config — `cloudbuild.worker.yaml` (done)
 
-There's **no `cloudbuild` config or trigger for the worker yet** (the existing
-`cloudbuild.yaml` builds `app/` only, using the root `Dockerfile`). Two options:
+The worker build config now lives at **`cloudbuild.worker.yaml`** in the repo
+root (the app's `cloudbuild.yaml` builds `app/` only, via the root `Dockerfile`).
+It mirrors the app config: build → push → deploy, but with the worker's deploy
+parameters (private, `2Gi`, concurrency `4`, max `5`) and the env/secrets in B.1.
+The worker `Dockerfile` lives at `worker/Dockerfile` and builds against the
+**repo root** as context (it does `COPY worker/ ...`), which is why the config
+passes `-f worker/Dockerfile .`.
 
-- **(a) Manual deploy** — fine to start; commands below.
-- **(b) `cloudbuild.worker.yaml` + a second trigger** — the durable CI path,
-  mirroring `deployment.md` Phase E. Recommended once the worker stabilizes.
-  This is a small code task to do alongside Track B.
+Two ways to use it:
 
-The worker `Dockerfile` lives at `worker/Dockerfile` and expects the **repo
-root** as build context (it does `COPY worker/ ...`).
+- **(a) `gcloud builds submit --config` (bootstrap / manual)** — runs the same
+  config without a trigger. Use this for the **first** deploy: you need the
+  worker URL it produces before you can create the push subscription in B.5.
+- **(b) Cloud Build trigger on `cloudbuild.worker.yaml` (durable CI path)** —
+  redeploys on push, mirroring `deployment.md` Phase E. Wire this once the
+  worker stabilizes. **Notes:** `cloudbuild.worker.yaml` must be on `main` before
+  a `^main$` trigger can use it (or point the trigger at the feature branch
+  temporarily); and add the trigger substitution **`_TAG` = `$COMMIT_SHA`** so
+  each CI revision is pinned to its commit (the config defaults `_TAG` to
+  `latest`, which is what makes the manual bootstrap in (a) work — `$COMMIT_SHA`
+  is empty on a manual `builds submit`).
+
+> The existing app trigger already deploys Cloud Run as the Cloud Build SA, and
+> the worker runs as the **same default compute runtime SA** — so the existing
+> `run.admin` + `actAs` grants cover the worker too. No new Cloud Build IAM.
 
 ### B.1 Build + deploy the worker
 
-**Console:** image building from a custom-context Dockerfile is awkward in the
-console — use the `gcloud builds submit` below for the image. Once the image is
-in Artifact Registry, you *can* deploy from the console: **Cloud Run** →
-**Deploy container** → **Service** → select the `den-bot-worker:latest` image →
-region `us-east4`, **Require authentication** (not "Allow unauthenticated"),
-then under **Container, Variables & Secrets, Connections, Security**: memory
-`2Gi`, request timeout `600`, max concurrency `4`, max instances `5`; add the
-env var + the three secrets listed below. The `gcloud run deploy` form is the
-single-command equivalent and is what the rest of this doc assumes.
+**gcloud (bootstrap — option a):** run the versioned config directly. This
+builds, pushes, and deploys `den-bot-worker` in one step:
 
-**gcloud:**
 ```bash
-# Build the worker image (root context, worker Dockerfile)
-gcloud builds submit \
-  --tag us-east4-docker.pkg.dev/blue-cypher/den-bot/den-bot-worker:latest \
-  --file worker/Dockerfile .
-
-# Deploy as a private Cloud Run service
-gcloud run deploy den-bot-worker \
-  --image=us-east4-docker.pkg.dev/blue-cypher/den-bot/den-bot-worker:latest \
-  --region=us-east4 \
-  --platform=managed \
-  --no-allow-unauthenticated \
-  --timeout=600s \
-  --memory=2Gi \
-  --cpu=1 \
-  --min-instances=0 \
-  --max-instances=5 \
-  --concurrency=4 \
-  --set-env-vars=QDRANT_KB_COLLECTION_NAME=denver_pdf_knowledge_base \
-  --set-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest,QDRANT_URL=QDRANT_URL:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest
+gcloud builds submit --config cloudbuild.worker.yaml --project=blue-cypher .
 ```
 
-Notes on the choices:
+**Console:** the image is built from a custom-context Dockerfile, which is
+awkward in the console — prefer the `gcloud builds submit` above. Once the image
+is in Artifact Registry you *can* deploy from the console: **Cloud Run** →
+**Deploy container** → **Service** → select `den-bot-worker:latest` → region
+`us-east4`, **Require authentication** (not "Allow unauthenticated"), then under
+**Container, Variables & Secrets, Connections, Security**: memory `2Gi`, request
+timeout `600`, max concurrency `4`, max instances `5`; add the env var + the
+three secrets listed below. But `cloudbuild.worker.yaml` already encodes all of
+this, so the one-command path is preferred.
+
+The deploy parameters (all baked into `cloudbuild.worker.yaml`):
 - **`--no-allow-unauthenticated`** — the worker is internal; only the Pub/Sub push SA may call it (B.5). Never expose `/pubsub/pdf-ingest` publicly.
 - **`--memory=2Gi`** — `pymupdf` parsing + 3072-dim embeddings are memory-heavy; bump if you see OOM in logs.
 - **`--timeout=600s`** + **`--concurrency=4`** — keep the HTTP timeout ≥ the Pub/Sub ack deadline (B.5), and concurrency low since ingestion is CPU/memory-bound.
-- **Secrets reused as-is** — `langchain_google_genai` reads `GEMINI_API_KEY` from the env (same as the app), and the worker writes to the same Qdrant cluster. `QDRANT_KB_COLLECTION_NAME` defaults to `denver_pdf_knowledge_base` in code; set explicitly for clarity.
+- **env `QDRANT_KB_COLLECTION_NAME=denver_pdf_knowledge_base`** + **secrets `GEMINI_API_KEY`, `QDRANT_URL`, `QDRANT_API_KEY`** — `langchain_google_genai` reads `GEMINI_API_KEY` from the env (same as the app), and the worker writes to the same Qdrant cluster. The collection name defaults to `denver_pdf_knowledge_base` in code; set explicitly for clarity.
+
+> **No new secrets needed.** `GEMINI_API_KEY`, `QDRANT_URL`, and `QDRANT_API_KEY`
+> already exist in Secret Manager (created for the app — see `deployment.md`).
+> The worker reuses them as-is. The only Secret Manager addition for V2 was
+> `ADMIN_PASSWORD`, which belongs to **Track A**, not the worker.
 
 Capture the worker URL (you'll need it in B.5):
 
@@ -481,7 +485,7 @@ gcloud pubsub subscriptions create den-bot-pdf-dlq-sub --topic=den-bot-pdf-dlq
 ## Operations
 
 ### Redeploying the worker
-Manual: rerun B.1 (`gcloud builds submit` + `gcloud run deploy`). CI: set up `cloudbuild.worker.yaml` + a trigger (B.0 option b).
+Manual: rerun B.1 (`gcloud builds submit --config cloudbuild.worker.yaml .`). CI: a Cloud Build trigger on `cloudbuild.worker.yaml` redeploys on push (B.0 option b).
 
 ### Rotating `ADMIN_PASSWORD`
 Secret Manager → `ADMIN_PASSWORD` → **+ New Version** (via `printf ... | gcloud secrets versions add ADMIN_PASSWORD --data-file=-`). Redeploy the app to pick up `:latest`. Tell the frontend admin the new password out of band.
@@ -508,4 +512,4 @@ Inspect via `den-bot-pdf-dlq-sub`. To reprocess, re-upload the PDF (simplest —
 
 **Track A:** `ADMIN_PASSWORD` secret (printf, no quotes) · runtime SA: secretAccessor + tokenCreator-on-self + objectAdmin on bucket · redeploy app · smoke
 
-**Track B:** worker build config (code) · deploy `den-bot-worker` (private) · worker IAM · topics `den-bot-pdf-events` + `den-bot-pdf-dlq` · GCS service agent publisher · bucket notification · push SA + `run.invoker` · push subscription w/ DLQ · Pub/Sub service agent DLQ grants · DLQ inspection sub · smoke
+**Track B:** worker build config (`cloudbuild.worker.yaml`, done) · deploy `den-bot-worker` (private, `gcloud builds submit --config`) · worker IAM · topics `den-bot-pdf-events` + `den-bot-pdf-dlq` · GCS service agent publisher · bucket notification · push SA + `run.invoker` · push subscription w/ DLQ · Pub/Sub service agent DLQ grants · DLQ inspection sub · smoke
