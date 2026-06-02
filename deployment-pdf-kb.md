@@ -300,9 +300,12 @@ Two ways to use it:
   worker URL it produces before you can create the push subscription in B.5.
 - **(b) Cloud Build trigger on `cloudbuild.worker.yaml` (durable CI path)** —
   redeploys on push, mirroring `deployment.md` Phase E. Wire this once the
-  worker stabilizes. **Note:** `cloudbuild.worker.yaml` must be on `main` before
+  worker stabilizes. **Notes:** `cloudbuild.worker.yaml` must be on `main` before
   a `^main$` trigger can use it (or point the trigger at the feature branch
-  temporarily).
+  temporarily); and add the trigger substitution **`_TAG` = `$COMMIT_SHA`** so
+  each CI revision is pinned to its commit (the config defaults `_TAG` to
+  `latest`, which is what makes the manual bootstrap in (a) work — `$COMMIT_SHA`
+  is empty on a manual `builds submit`).
 
 > The existing app trigger already deploys Cloud Run as the Cloud Build SA, and
 > the worker runs as the **same default compute runtime SA** — so the existing

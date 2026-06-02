@@ -11,17 +11,27 @@
 #
 # Resolved variables:
 #   $PROJECT_ID    = blue-cypher              (Cloud Build built-in)
-#   $COMMIT_SHA    = git commit SHA           (Cloud Build built-in)
 #   $_REGION       = us-east4                 (user-substitution, defaulted below)
 #   $_REPO         = den-bot                  (Artifact Registry repo — shared with the app)
 #   $_IMAGE        = den-bot-worker           (image name)
 #   $_SERVICE      = den-bot-worker           (Cloud Run service)
+#   $_TAG          = latest                   (immutable image tag; see note)
+#
+# $_TAG defaults to "latest" so manual bootstrap works as-is:
+#   gcloud builds submit --config cloudbuild.worker.yaml --project=blue-cypher .
+# NOTE: $COMMIT_SHA is populated ONLY on trigger builds — it's empty on a
+# manual `builds submit`, which would produce an invalid "image:" (empty tag).
+# So we use the user-defined $_TAG instead. For a commit-pinned manual build:
+#   --substitutions=_TAG=$(git rev-parse --short HEAD)
+# On the CI trigger (B.0 option b), set the substitution _TAG = $COMMIT_SHA so
+# each revision is pinned to its commit.
 
 substitutions:
   _REGION: us-east4
   _REPO: den-bot
   _IMAGE: den-bot-worker
   _SERVICE: den-bot-worker
+  _TAG: latest
 
 steps:
   - id: build
@@ -31,7 +41,7 @@ steps:
       - -f
       - worker/Dockerfile
       - -t
-      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${COMMIT_SHA}
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${_TAG}
       - -t
       - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest
       # Build context is the repo root (worker/Dockerfile COPYs worker/).
@@ -51,7 +61,7 @@ steps:
       - run
       - deploy
       - ${_SERVICE}
-      - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${COMMIT_SHA}
+      - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${_TAG}
       - --region=${_REGION}
       - --platform=managed
       # PRIVATE: only the Pub/Sub push SA may invoke. Never expose publicly.
@@ -73,7 +83,7 @@ steps:
       - --set-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest,QDRANT_URL=QDRANT_URL:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest
 
 images:
-  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${COMMIT_SHA}
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${_TAG}
   - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest
 
 options:
