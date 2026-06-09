@@ -113,3 +113,70 @@ def search_kb(query: str, k: int = 20) -> list[Document]:
     docs = [_point_to_document(p.payload or {}) for p in response.points]
     logger.info("kb search returned %d child hits (k=%d)", len(docs), k)
     return docs
+
+
+def _norm(value) -> str | None:
+    """Empty string / 'None' → None; otherwise the value unchanged."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s or None
+
+
+def list_documents() -> list[dict]:
+    """List distinct documents in the KB, deduped by `document_id`.
+
+    Source of truth for the frontend 'About' page. Scrolls the whole
+    collection (payload only, no vectors) and collapses each document's chunks
+    into one entry — document-level fields are constant across siblings, so any
+    chunk supplies them; `num_chunks` counts them and `page_count` takes the
+    max `parent_end_page`. Sorted newest-first by `uploaded_at`.
+
+    Trivially fast at civic-doc volume; if the chunk count grows, wrap this in
+    a short TTL cache. Returns `[]` if the collection doesn't exist yet.
+    """
+    client = _get_client()
+    if not client.collection_exists(KB_COLLECTION_NAME):
+        return []
+
+    by_doc: dict[str, dict] = {}
+    offset = None
+    while True:
+        points, offset = client.scroll(
+            collection_name=KB_COLLECTION_NAME,
+            with_payload=True,
+            with_vectors=False,
+            limit=256,
+            offset=offset,
+        )
+        for p in points:
+            payload = p.payload or {}
+            doc_id = payload.get("document_id")
+            if not doc_id:
+                continue
+            page_end = payload.get("parent_end_page") or 0
+            entry = by_doc.get(doc_id)
+            if entry is None:
+                by_doc[doc_id] = {
+                    "document_id": doc_id,
+                    "document_title": _norm(payload.get("document_title"))
+                    or _norm(payload.get("original_filename"))
+                    or "Untitled",
+                    "category": _norm(payload.get("category")),
+                    "source_url": _norm(payload.get("source_url")),
+                    "original_filename": _norm(payload.get("original_filename")),
+                    "uploaded_at": _norm(payload.get("uploaded_at")),
+                    "num_chunks": 1,
+                    "page_count": page_end,
+                }
+            else:
+                entry["num_chunks"] += 1
+                if page_end > entry["page_count"]:
+                    entry["page_count"] = page_end
+        if offset is None:
+            break
+
+    documents = list(by_doc.values())
+    documents.sort(key=lambda d: d.get("uploaded_at") or "", reverse=True)
+    logger.info("kb list_documents: %d distinct documents", len(documents))
+    return documents
