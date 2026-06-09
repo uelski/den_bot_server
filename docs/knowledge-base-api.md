@@ -74,6 +74,32 @@ need GET added to the bucket CORS policy — avoid; just open it.)
 
 ---
 
+## In-chat downloads (the `/query` `sources` event)
+
+The download endpoint isn't just for the About page — KB documents cited in a
+chat answer can be downloaded inline too. When `/query` retrieves a PDF, its
+entry in the streamed `sources` event carries the same `document_id`:
+
+```jsonc
+// one entry in the `sources` SSE event, for a knowledge-base hit
+{
+  "source_collection": "knowledge_base",   // discriminator
+  "document_id": "pdfs/budget/2026-...-budget.pdf",   // → pass to /download
+  "document_title": "2026 Budget Highlights",
+  "source_url": "https://denvergov.org/.../budget.pdf",  // optional
+  "page_start": 11,                          // optional
+  "page_end": 14,                            // optional
+  "category": "budget"                       // optional
+}
+```
+
+So the same on-click flow works in both places: take `document_id` →
+`GET /knowledge-base/documents/download?document_id=<id>` → open `download_url`.
+(Catalog/GIS source entries have `service_name` + `base_url` instead and no
+`source_collection`; branch on `source_collection === "knowledge_base"`.)
+
+---
+
 ## Why two links (Download vs. View on denvergov.org)
 
 They serve different jobs:

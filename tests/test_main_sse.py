@@ -104,6 +104,9 @@ class TestBuildSourcesPayload:
         assert len(result) == 1
         entry = result[0]
         assert entry["source_collection"] == "knowledge_base"
+        # document_id lets the frontend offer an in-chat download via the
+        # /knowledge-base/documents/download endpoint.
+        assert entry["document_id"] == "ord.pdf"
         assert entry["document_title"] == "Denver Code of Ordinances"
         assert entry["source_url"] == "https://denvergov.org/code.pdf"
         assert entry["page_start"] == 11 and entry["page_end"] == 14
