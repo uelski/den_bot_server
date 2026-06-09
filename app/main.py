@@ -26,6 +26,7 @@ logging.basicConfig(
 
 from app.admin import router as admin_router
 from app.feedback import router as feedback_router
+from app.knowledge_base import router as knowledge_base_router
 from app.graph.memory import build_checkpointer
 from app.graph.orchestrator import build_graph, graph as stateless_graph
 from app.tools.denvergov_search import DOC_TYPE as DENVERGOV_SEARCH_DOC_TYPE
@@ -68,6 +69,7 @@ app.add_middleware(
 
 app.include_router(feedback_router)
 app.include_router(admin_router)
+app.include_router(knowledge_base_router)
 
 
 class QueryBody(BaseModel):
@@ -98,6 +100,10 @@ def build_sources_payload(docs) -> list[dict]:
                 continue
             seen.add(kb_key)
             entry = {
+                # document_id is the GCS object path — the frontend passes it to
+                # GET /knowledge-base/documents/download to offer an in-chat
+                # download of the exact PDF this answer cited.
+                "document_id": document_id,
                 "document_title": d.metadata.get("document_title")
                 or d.metadata.get("original_filename", "Uploaded document"),
                 "source_collection": "knowledge_base",
