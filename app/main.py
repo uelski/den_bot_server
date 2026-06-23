@@ -26,6 +26,7 @@ logging.basicConfig(
 
 from app.admin import router as admin_router
 from app.feedback import router as feedback_router
+from app.keepalive import ping_backends
 from app.knowledge_base import router as knowledge_base_router
 from app.graph.memory import build_checkpointer
 from app.graph.orchestrator import build_graph, graph as stateless_graph
@@ -473,6 +474,14 @@ def build_tool_sources(tool_name: str, output) -> list[dict]:
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/ping")
+async def ping():
+    """Keepalive for the free-tier Qdrant Cloud + Redis Cloud resources, which
+    get reaped after inactivity. Hit on a schedule by GCP Cloud Scheduler;
+    touches each backend with a cheap read. See app/keepalive.py."""
+    return await ping_backends()
 
 
 @app.post("/query")
