@@ -41,6 +41,7 @@ State → Retrieve → Grade → [Generate | Scrape → Generate]
 ## API
 - POST /query — body: {query: str}, response: streaming text/event-stream
 - GET /health
+- GET /ping — keepalive that touches Qdrant + Redis so the free-tier managed resources aren't reaped for inactivity; hit on a schedule by GCP Cloud Scheduler (see app/keepalive.py)
 
 ## Environment Variables (.env)
 - GEMINI_API_KEY
