@@ -258,6 +258,58 @@ Edit `cloudbuild.yaml`, push to main, trigger fires. Or for a one-off hotfix: **
 - Qdrant Cloud free tier: $0
 - **Total**: ~$0–5/mo
 
+### Keepalive — stop free-tier Qdrant + Redis from being reaped
+
+Both **Qdrant Cloud** and **Redis Cloud** free tiers delete resources after a
+stretch of inactivity (they email warnings first). The app exposes
+**`GET /ping`** (`app/keepalive.py`) which touches each backend with a cheap
+authenticated read (Qdrant `get_collections`, Redis `PING`). Hit it on a
+schedule with **Cloud Scheduler** so the resources always look active.
+
+Best-effort by design: `/ping` returns per-backend status (`{status, qdrant,
+redis, timestamp}`) and never raises, so the job doesn't flap on a transient
+blip — a real failure shows as `"degraded"` in the response + logs.
+
+The app service is public (`--allow-unauthenticated`), so the job just hits the
+URL on a cron — no auth wiring needed.
+
+**Console:** **Cloud Scheduler** → **Create Job** → name `den-bot-keepalive`,
+region `us-east4`, frequency `0 */6 * * *`, timezone `America/Denver` →
+**Target type: HTTP**, URL `https://<den-bot-server-url>/ping`, HTTP method
+**GET**, Auth header **None** → **Create**.
+
+**gcloud:**
+```bash
+gcloud services enable cloudscheduler.googleapis.com --project=blue-cypher
+
+SERVICE_URL=$(gcloud run services describe den-bot-server \
+  --region=us-east4 --format='value(status.url)')
+
+gcloud scheduler jobs create http den-bot-keepalive \
+  --project=blue-cypher \
+  --location=us-east4 \
+  --schedule="0 */6 * * *" \
+  --time-zone="America/Denver" \
+  --uri="${SERVICE_URL}/ping" \
+  --http-method=GET \
+  --attempt-deadline=30s
+```
+
+**Verify:**
+```bash
+gcloud scheduler jobs run den-bot-keepalive --location=us-east4
+curl -s "${SERVICE_URL}/ping"   # → {"status":"ok","qdrant":"ok","redis":"ok",...}
+```
+Then confirm the job's run history is green (Cloud Scheduler → the job → Logs).
+
+> **Frequency:** every 6 hours is belt-and-suspenders; the free tiers reap only
+> after days of idle, so even daily (`0 9 * * *`) suffices. Pinging is a cheap
+> read — over-pinging costs nothing.
+>
+> **Optional hardening:** `/ping` is public. To stop arbitrary callers from
+> triggering backend reads, add a shared-secret `PING_TOKEN` check and have
+> Scheduler send it as a header. Low priority (it's a cheap read).
+
 ### Tearing down the original Memorystore + VPC stack
 
 If you initially provisioned Memorystore + a VPC connector (per an earlier version of this runbook) before settling on Redis Cloud, delete these to stop the ~$45/mo bill:
