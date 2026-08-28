@@ -1,126 +1,330 @@
 # Next steps
 
-Living priority list for the Denver Open Data RAG project. Ordered by what delivers the most leverage for the least effort first. Scope of each item is intentionally loose — refine when picking something up.
+Living priority list for the Denver Open Data RAG project. Ordered by what
+delivers the most leverage for the least effort first. Scope of each item is
+intentionally loose — refine when picking something up.
+
+**Companion doc:** `ITERATION_V2.md` holds design rationale and decisions
+(why the PDF KB is shaped the way it is, why Reddit was deferred). This file
+holds *status* — what's done, what's in flight, what's next. When they
+disagree, trust this one for status and that one for reasoning.
+
+---
+
+# YOU ARE HERE (last updated 2026-08-27)
+
+**Last commit on this branch: 2026-06-23.** If you're reading this cold after
+a gap, this section is the whole handoff. Everything below it is background.
+
+### State of the world
+
+- **Branch:** `feature/features_v2`, unpushed commits only.
+- **Prod is healthy and current.** Everything through PR #43 is merged to
+  `main` and deployed: PDF knowledge base end-to-end, catalog+KB retrieval
+  fan-out with Cohere rerank, public KB read API, `/ping` keepalive.
+- **Unpushed on `feature/features_v2`:** the page-ingest script (`67fca0f`),
+  the keep-set trim, the two citation branches + tests, and doc updates.
+  `aab0be1` (deployment.md keepalive docs) rides along.
+- **Test suite:** 754 passing. Run `python -m pytest -q` before any push.
+
+### The one thing in flight
+
+**denvergov.org HTML page ingest** — see the full section below. All code is
+written and green. It has **never been run with `--write`**, so nothing has
+entered Qdrant. Prod is completely unaffected by this branch.
+
+### Exact next action, in order
+
+1. ~~Decide the keep-set~~ ✅ **done 2026-08-27** — dropped Transparent Denver;
+   5 pages remain.
+2. ~~Two `doc_type` citation branches + tests~~ ✅ **done 2026-08-27** — see
+   § "Citation branches" below.
+3. **→ YOU ARE HERE. Run** `python scripts/ingest_denvergov_pages.py --write`
+   (data-mutating; hand-run, not agent-run). Needs `QDRANT_URL` /
+   `QDRANT_API_KEY` / `GEMINI_API_KEY` in env. Consider
+   `--only 1` first to sanity-check a single page end-to-end.
+4. **Verify** a page surfaces via `/query` — the answer should cite the page
+   title with **no page number**, and `sources` should carry `source_url` +
+   `doc_type: "denvergov_page"` with **no `document_id`** (so the frontend
+   renders a link, not a Download button).
+5. **Push, PR, merge** to `main`.
+
+Step 3 is the first irreversible action. If a page ingests badly, re-running
+after a fix overwrites it in place — `document_id` is the URL, so there's no
+duplicate-chunk cleanup to do.
+
+---
+
+## 1. In flight — denvergov.org page ingest
+
+Adding curated denvergov.org informational pages to the knowledge base — the
+static city pages the Tavily `search_denver_gov` tool doesn't reliably surface.
+Chosen over the Reddit alternative; that comparison is documented in
+`ITERATION_V2.md` § "Knowledge base source expansion".
+
+### What this is architecturally
+
+A **second, thinner ingestion path into the same Qdrant KB collection** the
+PDFs use. It deliberately bypasses the admin-upload pipeline (frontend →
+signed URL → GCS → Pub/Sub → worker), because there is no file: pages are a
+curated URL list, so there's no GCS object and therefore no `object.finalize`
+event to trigger Pub/Sub. The script imports `worker/pipeline` directly and
+writes to Qdrant from the CLI.
+
+**Shared with the PDF path:** the KB collection, the chunk/embed/upsert code,
+the payload shape, the `category` allowlist.
+
+**Different from the PDF path:**
+- Trigger is a CLI run (and could be scheduled), not a human upload event.
+- `document_id` is the page **URL** — *stable*, so a re-fetch overwrites in
+  place. PDFs use a timestamped `document_id`, which is exactly why
+  re-uploading a corrected PDF duplicates instead of replacing it.
+- `doc_type="denvergov_page"` distinguishes them downstream.
+
+**No graph changes needed** — the retriever already fans out to the KB
+collection and the reranker already merges mixed provenance.
+
+### Done (commit `67fca0f`, 2026-06-23, unpushed)
+
+- `scripts/ingest_denvergov_pages.py` — fetch (httpx) → extract main content
+  (trafilatura) → reuse `worker/pipeline` chunk/embed/upsert.
+  **Dry-run by default (no Qdrant writes).** `--write` to ingest,
+  `--only IDX` for a subset.
+- `trafilatura` added to `requirements.txt` (scripts-only dependency).
+- **Dry-run ran clean** — all 6 pages extracted, no JS-rendering problem
+  (the concern didn't materialize).
+
+| # | Page | Category | Extraction quality | Kept? |
+|---|---|---|---|---|
+| 1 | City Council Backgrounder | `council` | substantive | ✅ |
+| — | Transparent Denver | `transparency` | thin — ~549 chars, mostly links | ❌ dropped |
+| 2 | City Budget | `budget` | substantive | ✅ |
+| 3 | Financial Reports | `finance` | substantive | ✅ |
+| 4 | Investments & Debt | `finance` | thin — ~895 chars | ✅ |
+| 5 | Search for Records | `general` | substantive | ✅ |
+
+### Keep-set — decided 2026-08-27
+
+**Transparent Denver dropped**; the other five kept. It extracted to ~549
+chars of almost entirely navigation links, and a chunk that thin can only
+dilute retrieval. Its child pages carry the real content — Investments & Debt
+is already in the list; add more if they prove substantive. Investments & Debt
+is thin too but carries genuine content, so it stays.
+
+### Citation branches — done 2026-08-27
+
+Both downstream paths used to assume "KB document = uploaded PDF". They now
+branch on `doc_type` via a shared helper, so **any** future non-PDF KB source
+(Reddit, other scrapes) gets correct citation behavior for free rather than
+needing another special case.
+
+- **`app/retrieval/kb.py`** — new `is_file_backed_kb_doc(metadata)` +
+  `FILE_BACKED_KB_DOC_TYPES`. Uploaded PDFs predate the `doc_type` field and
+  don't set it, so an absent/empty `doc_type` means PDF. This is the single
+  place to register a future file-backed type.
+- **`app/main.py`** (`build_sources_payload`) — file-backed docs emit
+  `document_id` + page range as before. Non-file docs emit `doc_type` and
+  `source_url` and **omit `document_id`**, so the frontend renders a link
+  rather than a Download button that would 400.
+- **`app/graph/nodes/generator.py`** (`_format_docs`) — file-backed docs cite
+  `[Title, pages N–M]`; non-file docs cite `[Title]` alone, since a scraped
+  page always chunks to "page 1" and printing it would claim precision that
+  doesn't exist.
+- **Tests** — 5 added (2 in `test_generator_format.py`, 3 in
+  `test_main_sse.py`), plus a `denvergov_page_doc_factory` fixture in
+  `tests/conftest.py`. Suite at 754.
+
+**Frontend note:** the `sources` SSE entry for a page has no `document_id`.
+If the frontend keys its Download button off that field's presence it needs no
+change; if it assumes every `knowledge_base` entry is downloadable, it needs a
+guard.
+
+### Deferred out of this batch
+
+- **Checkbook page** — JS SPA, needs headless rendering or a data API.
+- **Municode ordinances** — huge separate corpus, different ingestion shape.
+- **Sitemap crawl** — v1 is a hardcoded curated list; crawling is a later call.
+- **Scheduled re-fetch** — stable `document_id` makes it idempotent and
+  therefore easy, but nothing schedules it yet.
+
+---
+
+## 2. Next up (nothing started)
+
+### Eval harness
+The natural follow-up to the test suite. ~20 representative queries with
+expected behavior in a LangSmith dataset, to regression-test prompt and model
+changes. The rerank-score run metadata (commit `fe8196d`) is the ready signal
+for this. Not blocking anything; pick it up when prompt-tuning starts to feel
+risky.
+
+### Geo-filtered retrieval
+Unblocked by data availability — almost every doc type now carries
+`metadata.location = {lat, lon}` (demographics, parks, libraries, rec centers,
+schools, RTD stops, plus copied centroids on per-neighborhood crime/traffic
+docs), and Qdrant supports `geo.radius` filters natively.
+
+- Add a geo-filter pass in `app/graph/nodes/retriever.py` when the
+  intent_router detects a "near X neighborhood" pattern.
+- Resolve neighborhood → centroid via existing demographics docs or the
+  resolver + geojson directly.
+- Could also become a `find_nearby` tool taking neighborhood + doc_type.
+
+**Effort:** ~half a day for the retriever-side filter; another half if wrapped
+as a tool.
+
+### More structured data sources
+Patterns are well-established (POI vs aggregate-per-neighborhood — see
+`ingest_field_shape_convention.md` in memory); each is roughly half a day.
+
+- **Denver Assessor property data** — "what are properties worth in my
+  neighborhood", pairs naturally with demographics. High user value.
+- **Building permits** — POI shape; "what's being built in RiNo lately".
+- **311 call data** — aggregate-per-neighborhood; "common complaints in Five
+  Points".
+- **Business / restaurant licenses** — neighborhood character beyond demographics.
+- **Eviction filings** — Denver Courts publish these; pairs with housing demographics.
+- **ACS vintages beyond 2017–2021** — comparable demographics over time.
+- **OSM / additional POI** — probably enriches existing summaries rather than
+  shipping as a new doc type.
+
+### Reddit as a knowledge source — deferred, gated
+Not an effort problem; the ingestion side is nearly identical to page ingest.
+Blocked on an unresolved **API/ToS access-path decision** (post-2023 Reddit
+API is paid and rate-limited; scraping violates ToS), plus a real
+provenance-design problem — anecdote must never blend into factual civic
+claims. Full reasoning in `ITERATION_V2.md` § "Knowledge base source
+expansion".
+
+### Pre-share polish (from ITERATION_V2.md)
+Worth revisiting before sharing publicly: p50/p95 latency measurement, mobile
+UI testing, graceful external-API fallbacks, and "what can I ask?" onboarding
+examples. See `ITERATION_V2.md` § "Fix Before Adding".
+
+---
+
+## 3. Known cleanups (small, non-blocking)
+
+- `scripts/ingest.py` should `create_payload_index('metadata.neighborhood_name',
+  'keyword')` after collection creation — a future re-ingest would otherwise
+  drop the index Qdrant Cloud strict mode requires.
+- `CLAUDE.md` says the embedding model is `text-embedding-004` (768d). Actual
+  is `gemini-embedding-001` (3072d).
+- `scripts/viewer_upsert.py` hardcodes `http://localhost:6333` with no
+  `api_key`. Local-only today; needs the standard env-var pattern if ever
+  pointed at prod.
+- **PDF KB has no delete/replace utility.** Because `document_id` is
+  timestamped, re-uploading a corrected PDF *duplicates* rather than replaces —
+  removal is a manual Qdrant filter-delete today. (Page ingest doesn't have
+  this problem; its `document_id` is stable.)
+- **Hub URL audit** — `scripts/audit_hub_urls.py` + `apply_hub_url_updates.py`.
+  Run periodically (quarterly?) or when broken links are reported.
+
+---
 
 ## Completed
 
-### LangSmith observability — done
-Tracing is live. `.env` carries `LANGCHAIN_API_KEY`, `LANGCHAIN_TRACING_V2=true`, and `LANGCHAIN_PROJECT=blue-cypher-dev`. `app/main.py` tags every `/query` run with `run_name: "/query: <preview>"` and the `api-query` tag so traces are searchable. `.env.example` documents the contract for new contributors.
+### PDF Knowledge Base — shipped, live in prod (2026-06)
+The largest epic to date. Design rationale is in `ITERATION_V2.md`; what
+actually shipped:
 
-### Testing — done (initial pyramid)
-`pytest` + `pytest-asyncio` in place via `pytest.ini`. 93 passing tests across:
-- SSE payload helpers (`build_sources_payload`, `build_map_viewer_links`, `_summarize_tool_output`).
-- Node-level: retriever, intent_router, generator `_format_docs`, tool_agent, neighborhood resolver.
-- Routing: `route_after_*` conditional edges + graph structure smoke test (regression guard for removed `pg_query` node).
-- External tools: weather (cached + uncached paths, NWS two-hop, period parsing).
-- Refactored `app/main.py` to extract pure helper functions out of the SSE event_stream closure for testability.
+- **Admin auth** — `app/admin.py`, `APIRouter(prefix="/admin")`.
+  Password-per-request with `hmac.compare_digest`, rate-limited,
+  `POST /admin/validate-password` so the frontend can gate its admin UI.
+- **Signed-URL upload flow** — `POST /admin/pdf-upload-url` returns a
+  short-TTL signed URL with upload metadata baked into the signature
+  (tamper-proof: a mismatched PUT header 403s). PDF bytes never touch FastAPI.
+- **Worker service** — `worker/`, a separate Cloud Run service.
+  `POST /pubsub/pdf-ingest` receives the GCS `object.finalize` Pub/Sub push →
+  download → pymupdf parse → parent/child chunk → embed → upsert. Deployed via
+  `cloudbuild.worker.yaml`.
+- **Retrieval integration** — `app/graph/nodes/retriever.py` fans out to
+  catalog + KB concurrently via `asyncio.gather` (20 candidates each);
+  `app/graph/nodes/reranker.py` merges with Cohere `rerank-english-v3.0`,
+  drops low-relevance docs by score threshold, and attaches rerank scores as
+  LangSmith run metadata.
+- **Public KB read API** — list documents + download URL; `sources` SSE events
+  carry `document_id` for in-chat download.
 
-**Eval harness** is the natural follow-up — once we have ~20 representative queries with expected behavior, LangSmith datasets can regression-test prompt/model changes. Not blocking anything; pick up when prompt-tuning starts to feel risky.
+### Multi-turn memory — shipped
+Redis-backed LangGraph checkpointer (`app/graph/memory.py`). `thread_id`
+accepted per request; graph compiled with the checkpointer at FastAPI lifespan
+startup, with a stateless fallback when `REDIS_URL` is unset.
+`main_router` sees conversation history, so follow-ups like "how about Park
+Hill?" classify against the prior topic instead of the bare query.
 
-### NWS weather tool — done (first agent tool, on `feature/geodata`)
-- 3-way `main_router` (general / data_search / tool); orchestrator routes `needs_tool` to a new `app/graph/nodes/tool_agent.py` ReAct loop.
-- `app/tools/registry.py` is the single registry of `@tool`-decorated functions bound to Gemini. First entry: `get_neighborhood_weather`, wrapping `app/tools/weather.py` (resolver → Qdrant lat/lon → NWS API).
-- Generator branches on `state.tool_results` to use a tool-aware prompt variant; streaming SSE token events flow as usual.
-- New SSE events: `tool_call` and `tool_result` (forwarded from LangChain's `on_tool_start` / `on_tool_end`, filtered to `langgraph_node == "tool_agent"`).
-- NWS reliability: 30-min TTL cache and 4-decimal coordinate rounding to avoid 301 redirects.
-- Adding the next tool is now: write the function, decorate with `@tool`, append to `AGENT_TOOLS`. No graph or router changes required.
+**Redis note:** Redis Cloud free tier on Redis 8, which bundles RediSearch +
+RedisJSON into core. Memorystore and Upstash were both attempted and failed —
+Memorystore ships zero modules; Upstash's RediSearch omits `FT._LIST`, which
+`AsyncRedisSaver.asetup()` requires. Don't re-litigate this.
 
-### URL field shape refactor — done (commit `4ee6dd6`)
-SSE contract update that split the dataset citation URL from the per-entity map URL on parks + RTD docs (and now seeds the convention for every later ingest). `app/main.py:build_map_viewer_links` prefers `metadata.map_url` over `hub_url` for the URL and `display_name` over `service_name` for the label — both backward-compatible. See `ingest_field_shape_convention.md` in memory for the authoritative reference.
+### Deployment — shipped, live
+GCP project `blue-cypher`, region `us-east4`. Cloud Run + Artifact Registry +
+Cloud Build GitHub trigger + Secret Manager, all declarative via
+`cloudbuild.yaml`. Qdrant Cloud migrated by snapshot/restore with a verified
+byte-identical parity test. GTFS lookup tables baked into the image
+(`cd69517`). `GET /ping` keepalive touches Qdrant + Redis on a Cloud Scheduler
+cadence so free-tier managed resources aren't reaped for inactivity. Full
+runbook in `deployment.md`.
 
-### More data sources — substantially done
-Six new data sources shipped using the patterns above. `ingest_field_shape_convention.md` in memory codifies the shape so future sources are mostly templated work.
+**Remaining deployment nice-to-haves:** rate limiting on `/query` (Gemini calls
+aren't free), and a lightweight auth layer if the frontend ever stops being our
+own trusted deployment.
 
-| Source | Pattern | Doc count | Branch / commit |
-|---|---|---|---|
-| Parks | POI (one doc per park) | 374 | `feature/parks-data` (PR #17) |
-| Crime | Aggregate per neighborhood | 78 | `feature/crime-data` (PR #18) |
-| Libraries | POI | 27 | `feature/new-city-data` `5a1da5c` |
-| Rec centers | POI | 31 | `feature/new-city-data` `15f5b3f` |
-| Non-public schools | POI (with `institution_type` discriminator) | 46 | `feature/new-city-data` `e443167` |
-| Public schools | POI (with `institution_type` discriminator) | 232 | `feature/new-city-data` `b656dec` |
-| Traffic accidents | Aggregate per neighborhood | ~78 | `feature/new-city-data` `0568075` |
+### Agent tools — 5 shipped
+`app/tools/registry.py` is the single registry. Adding one is: write the
+function, `@tool`-decorate it, append to `AGENT_TOOLS` — no graph or router
+changes.
 
-Remaining "More data sources" candidates from earlier — patterns now well-established, each is roughly half a day:
-- **Building permits** — POI shape; "what's being built in RiNo lately" type queries.
-- **311 call data** — likely aggregate-per-neighborhood; "what are common complaints in Five Points".
-- **ACS vintages beyond 2017–2021** — comparable demographics over time.
-- **OSM / additional POI data** — could enrich existing summaries rather than ship as new doc types.
+`get_neighborhood_weather` (NWS) · `get_rtd_service_alerts` ·
+`get_rtd_next_arrivals` · `get_rtd_vehicle_positions` ·
+`search_denver_gov` (Tavily)
 
----
+### Data sources — 9 ingests shipped
+All follow `ingest_field_shape_convention.md` (in memory) for URL/metadata shape.
 
-## 1. Memory (multi-turn conversations)
+| Source | Pattern | Docs |
+|---|---|---|
+| GIS service catalog | base catalog | — |
+| Neighborhood demographics (ACS 2017–2021) | aggregate per neighborhood | 78 |
+| Parks | POI | 374 |
+| Crime | aggregate per neighborhood | 78 |
+| Libraries | POI | 27 |
+| Rec centers | POI | 31 |
+| Public schools | POI (`institution_type` discriminator) | 232 |
+| Non-public schools | POI (`institution_type` discriminator) | 46 |
+| Traffic accidents | aggregate per neighborhood | ~78 |
+| RTD GTFS (stops/routes) | POI | — |
 
-Today the graph is stateless per request — each `/query` starts from scratch. The frontend can't ask follow-up questions like "what about Five Points?" after a query about Capitol Hill.
+### URL field shape refactor — shipped (`4ee6dd6`)
+Split the dataset citation URL from the per-entity map URL.
+`build_map_viewer_links` prefers `metadata.map_url` over `hub_url` and
+`display_name` over `service_name`; both backward-compatible. Authoritative
+reference: `ingest_field_shape_convention.md` in memory.
 
-**Tasks**:
-- Add a LangGraph `Checkpointer` (start with `MemorySaver` for local dev, upgrade to `PostgresSaver` or `RedisSaver` later for prod).
-- Accept a `thread_id` in the `/query` request body; pass it in `config={"configurable": {"thread_id": ...}}` when invoking the graph.
-- The `messages` state field (already `Annotated[list, add_messages]`) will accumulate across turns automatically via the reducer.
-- Update the generator prompt to treat prior messages as context, not just the latest query.
-- Frontend: generate/manage a thread_id per chat session and send it with each query.
+### LangSmith observability — shipped
+`.env` carries `LANGCHAIN_API_KEY`, `LANGCHAIN_TRACING_V2=true`,
+`LANGCHAIN_PROJECT=blue-cypher-dev`. Every `/query` run is tagged
+`run_name: "/query: <preview>"` + `api-query` so traces are searchable.
 
-**Decision**: whether to persist memory across API restarts (`PostgresSaver`) or keep it in-process only (`MemorySaver`). In-process is fine for now; upgrade when we deploy.
-
-**Effort**: ~half a day for in-process memory end-to-end including frontend changes.
-
-## 2. Deployment — active focus
-
-`deployment.md` already sketches the GCP Cloud Run + Qdrant Cloud path. Picking this up after the frontend deploy at bluecypher.ai. CORS already updated in `.env` / `.env.example` to allow the apex + www origins.
-
-### Qdrant Cloud — done (2026-05-19)
-Migrated via snapshot/restore (bit-for-bit) into `us-east4` cluster. Phase 5 parity test confirmed payloads byte-identical and top-10 retrieval overlap 100% across 15 representative queries. App-side `.env` flipped to the managed URL + API key; local Docker Qdrant kept running through ~2026-05-26 as a fallback.
-- One payload index added on `metadata.neighborhood_name` (keyword) on both clusters — required by Qdrant Cloud's `strict_mode_config.unindexed_filtering_retrieve=false`. Filters live in `app/tools/weather.py` and `app/tools/rtd_arrivals.py`.
-- Snapshot file lives under `snapshots/` (gitignored); safe to delete after the fallback window closes.
-
-### Cloud Build + Cloud Run scaffolding — done (2026-05-19, in commits on `feature/server-deploy`)
-GCP project `blue-cypher`, region `us-east4`. Artifact Registry repo + Cloud Build GitHub trigger + Cloud Run service + 9 Secret Manager secrets all provisioned via the console. `cloudbuild.yaml` builds → pushes → deploys with `--set-secrets` (declarative pattern: YAML is source of truth). See `deployment.md` for the full console runbook.
-
-### Cloud Run live — but two runtime data files missing from container
-
-Deploy is green and healthy via Postman after 3 Redis iterations (final: **Redis Cloud free tier on Redis 8**, which bundles RediSearch + RedisJSON into core). Memorystore and Upstash both attempted and failed: Memorystore ships zero modules; Upstash's RediSearch support excludes `FT._LIST` which `AsyncRedisSaver.asetup()` needs.
-
-Frontend smoke surfaced a follow-up issue: **`Dockerfile` only copies `app/`**, so two runtime data dependencies aren't in the container:
-
-1. `data/ODC_POP_ACS20172021NBRHDCOMMON.geojson` (520 KB, tracked in git) — populates `OFFICIAL_NAMES` in `app/neighborhoods/resolver.py`. **Without it, every neighborhood resolves to "not official" → weather + RTD arrivals tools fail.** Local fix staged on `feature/server-deploy` (uncommitted): adds explicit `COPY` to Dockerfile + `!`-exception to `.dockerignore`.
-2. `data/rtd_gtfs/` (~100 MB, gitignored) — read by `app/tools/_rtd_static.py`. Needs a design decision: bake into image, download at build, or stage via Cloud Storage.
-
-### Resume sequence
-
-Detail in memory `next_focus_deployment.md`. Short version:
-1. Commit + push the staged Dockerfile + .dockerignore changes → trigger redeploy → verify Capitol Hill weather works.
-2. Decide + implement GTFS strategy (most likely: download at Docker build time).
-3. Cleanup: tear down Memorystore + VPC connector (~$45/mo) and the unused Upstash DB.
-
-### Remaining (after data files are wired)
-- Maybe add localhost back to `ALLOWED_ORIGINS` in `cloudbuild.yaml` so dev frontend can call prod backend.
-- Add a lightweight auth layer if the frontend isn't going to be our own trusted deployment.
-- Rate limiting (token bucket on `/query`) — Gemini calls aren't free.
-
-### Follow-ups surfaced during Qdrant migration (non-blocking)
-- `scripts/ingest.py` should `create_payload_index('metadata.neighborhood_name', 'keyword')` after collection creation, so a future re-ingest doesn't drop the index that strict mode requires.
-- CLAUDE.md says embedding model is `text-embedding-004` (768d). Actual is `gemini-embedding-001` (3072d) — update the doc.
-- `scripts/viewer_upsert.py` hardcodes `http://localhost:6333` with no `api_key`. Local-only utility today; needs the standard env-var pattern if ever pointed at prod.
-
-**Effort**: 1-2 days depending on GCP familiarity.
-
-## 3. Geo-filtered retrieval (now unblocked)
-
-Almost every doc type now carries `metadata.location = {lat, lon}` — demographics, parks, libraries, rec centers, schools, RTD stops, plus copied centroids on the per-neighborhood crime / traffic docs. Qdrant supports `geo.location` filters natively, so we can now filter "parks within 1km of resolved neighborhood centroid" before semantic search.
-
-**Tasks**:
-- Pick a representative query like "parks near Capitol Hill" and add a geo-filter pass in `app/graph/nodes/retriever.py` when the intent_router detects a "near X neighborhood" pattern.
-- Resolve the neighborhood → centroid via the existing demographics docs (or the resolver+geojson directly).
-- Apply Qdrant `geo.radius` filter to narrow the candidate set before hybrid search runs.
-- Likely tool path too — could become a `find_nearby` tool that takes a neighborhood + doc_type filter and returns ranked points.
-
-**Effort**: ~half a day for the initial retriever-side filter; another half-day if we wrap as a tool.
+### Testing — shipped
+`pytest` + `pytest-asyncio` via `pytest.ini`. **749 tests.** Shared fixtures in
+`tests/conftest.py` (`make_doc`, `catalog_doc`, `neighborhood_doc_factory`,
+`mock_llm`). Covers SSE payload helpers, node-level behavior, conditional-edge
+routing, graph structure, and external tools.
 
 ---
 
-## Not on the list but worth noting
+## Deferred / considered and skipped
 
-- **Hub URL audit** has its own workflow in `scripts/audit_hub_urls.py` + `scripts/apply_hub_url_updates.py` — run periodically (quarterly?) or when broken links are reported. See `hub_url_audit_system.md` in memory.
-- **Frontend adaptation** to the enriched `sources` SSE payload (rendering neighborhood-demographics entries with `neighborhood_name`) and the `tool_call` / `tool_result` events — lives on the frontend repo. The post-refactor `map_url` / `display_name` fields are backward-compatible so nothing on the frontend should have broken when those landed.
-- **Resolver wired into retriever** — discussed but deferred. Canonicalize neighborhood names before the retriever runs (so "RiNo poverty" → "Five Points poverty"). Small future change.
-- **LLM-grounded route name resolver** — analogue to the neighborhood resolver for "W Line", "Route 15". Tier 3 ships with a lexical fallback in `rtd_vehicles.resolve_route_id`. Upgrade when traces show lexical failures.
+- **Resolver wired into retriever** — canonicalize neighborhood names before
+  retrieval ("RiNo poverty" → "Five Points poverty"). Small, still worth doing.
+- **LLM-grounded route name resolver** — analogue to the neighborhood resolver
+  for "W Line", "Route 15". Tier 3 ships with a lexical fallback in
+  `rtd_vehicles.resolve_route_id`; upgrade when traces show it failing.
+- **Semantic query cache** — Redis-backed, to skip redundant LLM calls on
+  similar queries.
+- **Neighborhood alias dictionary** — partly covered by the resolver's ALIASES tier.
+- **`bluecypher` CLI** — wrap ingest + query for reuse on other cities' data.
+- **User document upload / per-user local vector store** — personal context
+  layer (lease, insurance policy) cross-referenced with civic data.
