@@ -57,8 +57,11 @@ DOC_TYPE = "denvergov_page"
 PAGES = [
     {"url": "https://www.denvergov.org/Government/Agencies-Departments-Offices/Agencies-Departments-Offices-Directory/Denver-City-Council/Press-Room/press-reference/city-council-backgrounder",
      "category": "council"},
-    {"url": "https://www.denvergov.org/Government/Legislation-and-Transparency/Transparent-Denver",
-     "category": "transparency"},
+    # Dropped after the dry-run: the Transparent Denver landing page
+    # (/Government/Legislation-and-Transparency/Transparent-Denver) extracts to
+    # ~549 chars of almost entirely navigation links. A chunk that thin can only
+    # dilute retrieval. Its child pages carry the real content — Investments &
+    # Debt is below; add others here if they prove substantive.
     {"url": "https://denvergov.org/Government/Agencies-Departments-Offices/Agencies-Departments-Offices-Directory/Department-of-Finance/Our-Divisions/Budget-and-Management-Office/City-Budget",
      "category": "budget"},
     {"url": "https://www.denvergov.org/Government/Agencies-Departments-Offices/Agencies-Departments-Offices-Directory/Department-of-Finance/Financial-Reports",
