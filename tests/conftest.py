@@ -74,22 +74,57 @@ def kb_doc_factory():
         child_text: str = "child chunk text",
         parent_start_page: int = 11,
         parent_end_page: int = 14,
+        doc_type: str | None = None,
     ) -> Document:
-        return Document(
-            page_content=child_text,
-            metadata={
-                "source_collection": "knowledge_base",
-                "document_id": document_id,
-                "document_title": document_title,
-                "source_url": source_url,
-                "category": category,
-                "child_index": child_index,
-                "child_text": child_text,
-                "parent_index": parent_index,
-                "parent_text": parent_text,
-                "parent_start_page": parent_start_page,
-                "parent_end_page": parent_end_page,
-            },
+        metadata = {
+            "source_collection": "knowledge_base",
+            "document_id": document_id,
+            "document_title": document_title,
+            "source_url": source_url,
+            "category": category,
+            "child_index": child_index,
+            "child_text": child_text,
+            "parent_index": parent_index,
+            "parent_text": parent_text,
+            "parent_start_page": parent_start_page,
+            "parent_end_page": parent_end_page,
+        }
+        # Uploaded PDFs predate the doc_type field and don't set it at all —
+        # omitting the key (rather than setting None) keeps the fixture faithful
+        # to the real payload. Non-file sources like scraped denvergov.org pages
+        # set it explicitly.
+        if doc_type is not None:
+            metadata["doc_type"] = doc_type
+        return Document(page_content=child_text, metadata=metadata)
+
+    return _factory
+
+
+@pytest.fixture
+def denvergov_page_doc_factory(kb_doc_factory):
+    """A scraped denvergov.org page in the KB collection.
+
+    Same collection and payload shape as an uploaded PDF, but with no stored
+    file behind it: document_id is the page URL, and the chunker assigns every
+    scraped page "page 1". Downstream citation code must branch on doc_type.
+    """
+
+    def _factory(
+        *,
+        url: str = "https://www.denvergov.org/Government/City-Budget",
+        document_title: str = "City Budget",
+        category: str = "budget",
+        **kwargs,
+    ) -> Document:
+        return kb_doc_factory(
+            document_id=url,
+            source_url=url,
+            document_title=document_title,
+            category=category,
+            parent_start_page=1,
+            parent_end_page=1,
+            doc_type="denvergov_page",
+            **kwargs,
         )
 
     return _factory

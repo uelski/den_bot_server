@@ -40,6 +40,29 @@ SPARSE_VECTOR_NAME = "sparse"
 DENSE_MODEL = "models/gemini-embedding-001"
 SPARSE_MODEL = "Qdrant/bm25"
 
+# The KB collection is multi-provenance: admin-uploaded PDFs sit alongside
+# scraped web sources (scripts/ingest_denvergov_pages.py). They cite
+# differently, so downstream code branches on `doc_type` rather than assuming
+# every KB hit is a file.
+#
+# Uploaded PDFs predate the field and don't set it, so an absent or empty
+# doc_type means "PDF". Add future file-backed types here; anything else is
+# treated as non-file.
+FILE_BACKED_KB_DOC_TYPES = {None, "", "pdf"}
+
+
+def is_file_backed_kb_doc(metadata: dict) -> bool:
+    """True when a KB document has a stored file (a GCS object) behind it.
+
+    File-backed docs can be offered for in-chat download via `document_id` and
+    cited by real page range. Non-file sources (e.g. `doc_type` of
+    "denvergov_page") have neither: their `document_id` is a URL that the
+    download endpoint can't resolve, and their page numbers are a chunking
+    artifact — a scraped page is always "page 1". Those cite by `source_url`
+    and title alone.
+    """
+    return metadata.get("doc_type") in FILE_BACKED_KB_DOC_TYPES
+
 
 @lru_cache(maxsize=1)
 def _get_client() -> QdrantClient:

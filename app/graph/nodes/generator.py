@@ -32,6 +32,7 @@ from app.prompts.generator_prompt import (
     GENERATOR_SYSTEM_STANDARD,
     GENERATOR_SYSTEM_TOOL,
 )
+from app.retrieval.kb import is_file_backed_kb_doc
 
 logger = logging.getLogger(__name__)
 
@@ -41,21 +42,24 @@ MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 def _format_docs(docs) -> str:
     parts = []
     for d in docs:
-        # PDF knowledge-base docs: content is the parent chunk (post-expansion);
-        # cite by document title + the parent's page range, not a single page —
-        # the model reasoned over the whole parent. See ITERATION_V2 § Citation.
+        # Knowledge-base docs: content is the parent chunk (post-expansion).
+        # PDFs cite by document title + the parent's page range, not a single
+        # page — the model reasoned over the whole parent. See ITERATION_V2
+        # § Citation. Scraped sources cite by title alone: their page numbers
+        # are a chunking artifact (always "page 1"), so printing them would
+        # claim precision that doesn't exist.
         if d.metadata.get("source_collection") == "knowledge_base":
             title = d.metadata.get("document_title") or d.metadata.get(
                 "original_filename", "Uploaded document"
             )
-            start = d.metadata.get("parent_start_page")
-            end = d.metadata.get("parent_end_page")
-            if start and end and start != end:
-                header = f"[{title}, pages {start}–{end}]"
-            elif start:
-                header = f"[{title}, page {start}]"
-            else:
-                header = f"[{title}]"
+            header = f"[{title}]"
+            if is_file_backed_kb_doc(d.metadata):
+                start = d.metadata.get("parent_start_page")
+                end = d.metadata.get("parent_end_page")
+                if start and end and start != end:
+                    header = f"[{title}, pages {start}–{end}]"
+                elif start:
+                    header = f"[{title}, page {start}]"
             parts.append(f"{header}\n{d.page_content}")
             continue
 

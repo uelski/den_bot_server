@@ -80,6 +80,34 @@ class TestFormatDocsKnowledgeBase:
         result = _format_docs([doc])
         assert "[budget2025.pdf" in result
 
+    def test_scraped_page_cites_title_only(self, denvergov_page_doc_factory):
+        """A scraped page always chunks to "page 1" — citing it would claim
+        precision that doesn't exist, so pages cite by title alone."""
+        doc = denvergov_page_doc_factory(
+            document_title="City Budget",
+            child_text="the budget page body",
+        )
+        result = _format_docs([doc])
+        assert result.startswith("[City Budget]")
+        assert "page" not in result.split("\n")[0]
+        assert "the budget page body" in result
+
+    def test_scraped_page_and_pdf_cite_differently(
+        self, kb_doc_factory, denvergov_page_doc_factory
+    ):
+        docs = [
+            kb_doc_factory(
+                document_id="ord.pdf",
+                document_title="Denver Code of Ordinances",
+                parent_start_page=11,
+                parent_end_page=14,
+            ),
+            denvergov_page_doc_factory(document_title="City Budget"),
+        ]
+        result = _format_docs(docs)
+        assert "[Denver Code of Ordinances, pages 11–14]" in result
+        assert "[City Budget]" in result
+
 
 class TestFormatDocsStructure:
     def test_docs_separated_by_hr(self, catalog_doc, make_doc):
