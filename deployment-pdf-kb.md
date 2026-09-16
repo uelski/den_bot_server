@@ -161,7 +161,7 @@ printf '%s' 'YOUR-STRONG-PASSWORD' | \
 > literal 9-character string including quotes, and the constant-time compare
 > will fail against the password the frontend sends. If you do use the console,
 > paste the raw password with no quotes and no trailing newline. (Same gotcha
-> that bit the Resend values — see `secret_manager_quotes_gotcha` in memory.)
+> that bit the Resend values — see deployment.md § "Strip wrapping quotes".)
 
 Grant the runtime SA read access (skip if you did the project-level grant in `deployment.md` A.3):
 

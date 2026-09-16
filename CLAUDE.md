@@ -79,6 +79,11 @@ service from the outside rather than importing it.
 - FEEDBACK_TO_EMAIL — destination address for feedback emails (your inbox)
 - FEEDBACK_FROM_EMAIL — sender address. Default `onboarding@resend.dev` works ONLY for delivery to the email registered on the Resend account. Override once a sending domain is verified.
 
+## Writing a new ingest script
+`docs/ingest-field-shape.md` is the authoritative metadata + URL shape — POI vs
+aggregate-per-neighborhood, the shared-`doc_type` discriminator pattern, and the
+`--purge` scoping trap. Read it before adding a data source.
+
 ## Dev Notes
 - Local infra: `docker compose up -d` (brings up Qdrant + Redis with persistent named volumes; see `docker-compose.yml`)
 - Ingest: `python scripts/ingest.py`

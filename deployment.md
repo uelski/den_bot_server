@@ -157,6 +157,33 @@ If you skipped the project-level `secretmanager.secretAccessor` grant in A.3, re
 
 > **Note on `ALLOWED_ORIGINS`**: not sensitive; baked into `cloudbuild.yaml` as a `--set-env-vars` value (`https://bluecypher.ai,https://www.bluecypher.ai`). If origins change, edit `cloudbuild.yaml` and merge.
 
+### ⚠️ Strip wrapping quotes when copying from `.env`
+
+`.env` values like `FEEDBACK_FROM_EMAIL="Name <foo@bar.com>"` work locally
+because python-dotenv strips matching wrapping quotes for you. **Secret Manager
+does not.** Whatever bytes are in the secret reach `os.getenv()` verbatim,
+quotes included.
+
+This cost a session to diagnose once: a literal `"foo@bar.com"` (quote
+characters intact) sent as Resend's `from` field returned
+a `422` with `Invalid "from" field`, because the value matched neither
+`email@example.com` nor `Name <email@example.com>`. The symptom appeared only in
+prod.
+
+- Paste values **without** the wrapping quotes.
+- Setting a secret non-interactively, use `printf`, **not** `echo` — `echo`
+  appends a trailing newline that causes the same class of bug:
+  ```bash
+  printf '%s' 'value' | gcloud secrets versions add NAME --data-file=-
+  ```
+- `app/feedback.py` has a defensive `_clean_env()` helper mirroring
+  python-dotenv's behavior (strip whitespace + matching surrounding quotes).
+  Apply the same guard to any new env-driven consumer where the value's
+  *format* matters.
+- Affected: anything format-validated downstream — email addresses, signed URLs,
+  JWT-style tokens. Not affected: opaque blobs, or Pydantic configs that already
+  trim.
+
 ---
 
 ## Phase E — Cloud Build trigger (GitHub → main)

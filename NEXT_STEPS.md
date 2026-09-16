@@ -180,7 +180,7 @@ as a tool.
 
 ### More structured data sources
 Patterns are well-established (POI vs aggregate-per-neighborhood — see
-`ingest_field_shape_convention.md` in memory); each is roughly half a day.
+`docs/ingest-field-shape.md`); each is roughly half a day.
 
 - **Denver Assessor property data** — "what are properties worth in my
   neighborhood", pairs naturally with demographics. High user value.
@@ -286,7 +286,7 @@ changes.
 `search_denver_gov` (Tavily)
 
 ### Data sources — 9 ingests shipped
-All follow `ingest_field_shape_convention.md` (in memory) for URL/metadata shape.
+All follow `docs/ingest-field-shape.md` for URL/metadata shape.
 
 | Source | Pattern | Docs |
 |---|---|---|
@@ -305,7 +305,7 @@ All follow `ingest_field_shape_convention.md` (in memory) for URL/metadata shape
 Split the dataset citation URL from the per-entity map URL.
 `build_map_viewer_links` prefers `metadata.map_url` over `hub_url` and
 `display_name` over `service_name`; both backward-compatible. Authoritative
-reference: `ingest_field_shape_convention.md` in memory.
+reference: `docs/ingest-field-shape.md`.
 
 ### LangSmith observability — shipped
 `.env` carries `LANGCHAIN_API_KEY`, `LANGCHAIN_TRACING_V2=true`,
