@@ -34,10 +34,17 @@ from pathlib import Path
 
 import httpx
 import trafilatura
+from dotenv import load_dotenv
 
 # Make the repo root importable when run as `python scripts/ingest_denvergov_pages.py`
 # (mirrors scripts/ingest_rtd_gtfs.py).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# worker.pipeline reads QDRANT_URL / QDRANT_API_KEY into module-level constants at
+# import time. On Cloud Run the platform injects them and worker/main.py loads .env
+# itself; from the CLI nothing does, so load it *before* importing — otherwise
+# QDRANT_URL silently falls back to localhost and the write is refused.
+load_dotenv()
 
 from worker.pipeline.chunker import chunk_pages
 from worker.pipeline.parser import ParsedPage
