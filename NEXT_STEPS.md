@@ -11,51 +11,56 @@ disagree, trust this one for status and that one for reasoning.
 
 ---
 
-# YOU ARE HERE (last updated 2026-08-27)
+# YOU ARE HERE (last updated 2026-09-15)
 
-**Last commit on this branch: 2026-06-23.** If you're reading this cold after
-a gap, this section is the whole handoff. Everything below it is background.
+**Direction change — read this first.** Work on this repo is pausing. The next
+phase is a **training harness built in a new sibling repo**, one level up at
+`~/Development/denver_data/`, which treats *this* service as the environment to
+train a model against tool calls. This repo is now a dependency, not the
+active workstream.
 
 ### State of the world
 
-- **Branch:** `feature/features_v2`, unpushed commits only.
-- **Prod is healthy and current.** Everything through PR #43 is merged to
-  `main` and deployed: PDF knowledge base end-to-end, catalog+KB retrieval
-  fan-out with Cohere rerank, public KB read API, `/ping` keepalive.
-- **Unpushed on `feature/features_v2`:** the page-ingest script (`67fca0f`),
-  the keep-set trim, the two citation branches + tests, and doc updates.
-  `aab0be1` (deployment.md keepalive docs) rides along.
-- **Test suite:** 754 passing. Run `python -m pytest -q` before any push.
+- **Prod is healthy and current.** The `feature/features_v2` work (page ingest,
+  citation branching, `/ping` keepalive) is merged to `main`.
+- **denvergov.org page ingest: DONE.** Ran `--write` on 2026-09-15. The KB
+  collection went **11 → 29 points** (+18 chunks from 5 pages), verified
+  directly against Qdrant Cloud.
+- **Test suite: 754 passing**, verified 2026-09-15. `python -m pytest -q`.
+- **Build status after the merge to `main` was not confirmed in-session** — if
+  you're picking this up cold, check Cloud Build before assuming prod matches
+  `main`.
 
-### The one thing in flight
+### If you're the harness session reading this from the parent directory
 
-**denvergov.org HTML page ingest** — see the full section below. All code is
-written and green. It has **never been run with `--write`**, so nothing has
-entered Qdrant. Prod is completely unaffected by this branch.
+Start with the two facts that took a session to establish:
 
-### Exact next action, in order
+1. **The tool surface is `app/tools/registry.py`** — 5 `@tool`-decorated plain
+   functions in a flat `AGENT_TOOLS` list, importable without FastAPI or the
+   graph. That's the natural seam for a harness. See CLAUDE.md § Agent Tools.
+2. **The HTTP surface is 8 routes**, listed in CLAUDE.md § API. `POST /query`
+   is SSE; its `sources` event shape changed in `d4ff144` — file-backed KB docs
+   carry `document_id`, non-file docs carry `source_url` + `doc_type` and omit
+   `document_id`.
 
-1. ~~Decide the keep-set~~ ✅ **done 2026-08-27** — dropped Transparent Denver;
-   5 pages remain.
-2. ~~Two `doc_type` citation branches + tests~~ ✅ **done 2026-08-27** — see
-   § "Citation branches" below.
-3. **→ YOU ARE HERE. Run** `python scripts/ingest_denvergov_pages.py --write`
-   (data-mutating; hand-run, not agent-run). Needs `QDRANT_URL` /
-   `QDRANT_API_KEY` / `GEMINI_API_KEY` in env. Consider
-   `--only 1` first to sanity-check a single page end-to-end.
-4. **Verify** a page surfaces via `/query` — the answer should cite the page
-   title with **no page number**, and `sources` should carry `source_url` +
-   `doc_type: "denvergov_page"` with **no `document_id`** (so the frontend
-   renders a link, not a Download button).
-5. **Push, PR, merge** to `main`.
+**Gotcha that will bite you:** anything importing `worker.pipeline` directly
+must call `load_dotenv()` *before* the import. Those modules snapshot
+`QDRANT_URL` into module-level constants at import time and default to
+`localhost:6333`, so a missing `.env` load fails as a confusing
+`[Errno 61] Connection refused` against localhost while a perfectly good cloud
+URL sits unread in `.env`. `worker/main.py` loads dotenv itself; the CLI
+scripts have to do it themselves. Fixed in `scripts/ingest_denvergov_pages.py`;
+`scripts/viewer_upsert.py` still has the older variant of this bug.
 
-Step 3 is the first irreversible action. If a page ingests badly, re-running
-after a fix overwrites it in place — `document_id` is the URL, so there's no
-duplicate-chunk cleanup to do.
+### What's left here, if you come back
+
+Nothing is in flight. The queue is § 2 below — eval harness, geo-filtered
+retrieval, more data sources. The eval-harness item may be worth reading even
+from the harness repo; it overlaps with what a training environment needs.
 
 ---
 
-## 1. In flight — denvergov.org page ingest
+## 1. Shipped — denvergov.org page ingest (ingested + merged 2026-09-15)
 
 Adding curated denvergov.org informational pages to the knowledge base — the
 static city pages the Tavily `search_denver_gov` tool doesn't reliably surface.
@@ -84,7 +89,7 @@ the payload shape, the `category` allowlist.
 **No graph changes needed** — the retriever already fans out to the KB
 collection and the reranker already merges mixed provenance.
 
-### Done (commit `67fca0f`, 2026-06-23, unpushed)
+### Done (commit `67fca0f`, 2026-06-23, merged to `main` 2026-09-15)
 
 - `scripts/ingest_denvergov_pages.py` — fetch (httpx) → extract main content
   (trafilatura) → reuse `worker/pipeline` chunk/embed/upsert.
@@ -175,7 +180,7 @@ as a tool.
 
 ### More structured data sources
 Patterns are well-established (POI vs aggregate-per-neighborhood — see
-`ingest_field_shape_convention.md` in memory); each is roughly half a day.
+`docs/ingest-field-shape.md`); each is roughly half a day.
 
 - **Denver Assessor property data** — "what are properties worth in my
   neighborhood", pairs naturally with demographics. High user value.
@@ -281,7 +286,7 @@ changes.
 `search_denver_gov` (Tavily)
 
 ### Data sources — 9 ingests shipped
-All follow `ingest_field_shape_convention.md` (in memory) for URL/metadata shape.
+All follow `docs/ingest-field-shape.md` for URL/metadata shape.
 
 | Source | Pattern | Docs |
 |---|---|---|
@@ -300,7 +305,7 @@ All follow `ingest_field_shape_convention.md` (in memory) for URL/metadata shape
 Split the dataset citation URL from the per-entity map URL.
 `build_map_viewer_links` prefers `metadata.map_url` over `hub_url` and
 `display_name` over `service_name`; both backward-compatible. Authoritative
-reference: `ingest_field_shape_convention.md` in memory.
+reference: `docs/ingest-field-shape.md`.
 
 ### LangSmith observability — shipped
 `.env` carries `LANGCHAIN_API_KEY`, `LANGCHAIN_TRACING_V2=true`,
