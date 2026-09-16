@@ -129,6 +129,48 @@ class TestBuildSourcesPayload:
         kinds = {e.get("source_collection") for e in result}
         assert "knowledge_base" in kinds
 
+    def test_scraped_page_omits_document_id_and_pages(
+        self, denvergov_page_doc_factory
+    ):
+        """Scraped pages have no GCS object, so a Download button would 400."""
+        url = "https://www.denvergov.org/Government/City-Budget"
+        doc = denvergov_page_doc_factory(url=url, document_title="City Budget")
+        result = build_sources_payload([doc])
+        assert len(result) == 1
+        entry = result[0]
+        assert entry["source_collection"] == "knowledge_base"
+        assert entry["doc_type"] == "denvergov_page"
+        assert entry["document_title"] == "City Budget"
+        # The frontend links out to the live page instead of downloading.
+        assert entry["source_url"] == url
+        assert "document_id" not in entry
+        # "page 1" is a chunking artifact for scraped pages, not real pagination.
+        assert "page_start" not in entry
+        assert "page_end" not in entry
+
+    def test_scraped_pages_dedup_by_url(self, denvergov_page_doc_factory):
+        """Many chunks, one page — document_id (the URL) is still the dedup key
+        even though it isn't emitted."""
+        url = "https://www.denvergov.org/Government/City-Budget"
+        docs = [
+            denvergov_page_doc_factory(url=url, parent_index=i, child_index=i)
+            for i in range(4)
+        ]
+        assert len(build_sources_payload(docs)) == 1
+
+    def test_pdf_and_scraped_page_coexist(
+        self, kb_doc_factory, denvergov_page_doc_factory
+    ):
+        """The KB collection is multi-provenance; each cites its own way."""
+        docs = [kb_doc_factory(document_id="ord.pdf"), denvergov_page_doc_factory()]
+        result = build_sources_payload(docs)
+        assert len(result) == 2
+        downloadable = [e for e in result if "document_id" in e]
+        link_only = [e for e in result if "document_id" not in e]
+        assert len(downloadable) == 1 and downloadable[0]["document_id"] == "ord.pdf"
+        assert len(link_only) == 1
+        assert link_only[0]["doc_type"] == "denvergov_page"
+
 
 class TestBuildMapViewerLinks:
     def test_empty_docs_returns_empty(self):

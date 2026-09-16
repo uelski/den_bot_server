@@ -17,6 +17,7 @@ pandas                     # GTFS file joins (scripts/ingest_rtd_gtfs.py only â€
 gtfs-realtime-bindings     # protobuf parser for app/tools/rtd_alerts.py
 tavily-python>=0.5.0       # AsyncTavilyClient backing the search_denver_gov tool
 cohere                     # rerank-english-v3.0 in app/graph/nodes/reranker.py (merges catalog + PDF KB hits)
+trafilatura                # HTML main-content extraction for scripts/ingest_denvergov_pages.py (scripts only â€” not loaded at runtime)
 langgraph-checkpoint-redis>=0.4.0  # AsyncRedisSaver for multi-turn conversation memory
 google-cloud-storage       # v4 signed-URL generation for the /admin PDF upload flow (app/admin.py)
 google-auth                # IAM signBlob keyless-signing path in app/admin.py (imported directly)

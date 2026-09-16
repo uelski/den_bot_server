@@ -30,6 +30,7 @@ from app.keepalive import ping_backends
 from app.knowledge_base import router as knowledge_base_router
 from app.graph.memory import build_checkpointer
 from app.graph.orchestrator import build_graph, graph as stateless_graph
+from app.retrieval.kb import is_file_backed_kb_doc
 from app.tools.denvergov_search import DOC_TYPE as DENVERGOV_SEARCH_DOC_TYPE
 
 logger = logging.getLogger(__name__)
@@ -91,9 +92,9 @@ def build_sources_payload(docs) -> list[dict]:
     seen: set[tuple] = set()
     sources: list[dict] = []
     for d in docs:
-        # PDF knowledge-base docs cite by document, not by GIS service. They
-        # carry no base_url, so they'd be dropped by the catalog path below —
-        # handle them first. Dedup by document_id (many chunks, one document).
+        # Knowledge-base docs cite by document, not by GIS service. They carry
+        # no base_url, so they'd be dropped by the catalog path below — handle
+        # them first. Dedup by document_id (many chunks, one document).
         if d.metadata.get("source_collection") == "knowledge_base":
             document_id = d.metadata.get("document_id")
             kb_key = ("knowledge_base", document_id)
@@ -101,21 +102,29 @@ def build_sources_payload(docs) -> list[dict]:
                 continue
             seen.add(kb_key)
             entry = {
-                # document_id is the GCS object path — the frontend passes it to
-                # GET /knowledge-base/documents/download to offer an in-chat
-                # download of the exact PDF this answer cited.
-                "document_id": document_id,
                 "document_title": d.metadata.get("document_title")
                 or d.metadata.get("original_filename", "Uploaded document"),
                 "source_collection": "knowledge_base",
             }
+            if is_file_backed_kb_doc(d.metadata):
+                # document_id is the GCS object path — the frontend passes it to
+                # GET /knowledge-base/documents/download to offer an in-chat
+                # download of the exact PDF this answer cited.
+                entry["document_id"] = document_id
+                start = d.metadata.get("parent_start_page")
+                end = d.metadata.get("parent_end_page")
+                if start:
+                    entry["page_start"] = start
+                    entry["page_end"] = end or start
+            else:
+                # Scraped sources have no stored file: document_id is a URL the
+                # download endpoint can't resolve, so emitting it would render a
+                # Download button that 400s. Page numbers are omitted too — a
+                # scraped page always chunks to "page 1". The frontend links out
+                # via source_url instead; doc_type tells it which to render.
+                entry["doc_type"] = d.metadata.get("doc_type")
             if d.metadata.get("source_url"):
                 entry["source_url"] = d.metadata["source_url"]
-            start = d.metadata.get("parent_start_page")
-            end = d.metadata.get("parent_end_page")
-            if start:
-                entry["page_start"] = start
-                entry["page_end"] = end or start
             if d.metadata.get("category"):
                 entry["category"] = d.metadata["category"]
             sources.append(entry)

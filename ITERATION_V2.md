@@ -1,4 +1,16 @@
-# Blue Cypher V2 — Pre-Share Checklist & Next Steps
+# Blue Cypher V2 — Design Decisions & Pre-Share Checklist
+
+> **What this doc is:** design rationale and decisions — *why* things are
+> shaped the way they are, including options considered and rejected. It is
+> deliberately not a status tracker.
+>
+> **For current status** — what's done, what's in flight, what to do next —
+> see `NEXT_STEPS.md`. It opens with a "YOU ARE HERE" block written for
+> picking the project back up cold.
+>
+> Sections here are tagged **✅ SHIPPED**, **🚧 IN FLIGHT**, or **⏸ DEFERRED**
+> as of 2026-08-27 so the reasoning stays readable without pretending to be
+> a to-do list.
 
 ## Fix Before Adding
 
@@ -10,7 +22,7 @@ whether people find the tool useful or bounce immediately.
 - **Target**: "Five Points had 847 reported incidents last year, down from 923 the prior year — mostly property crime"
 - **Avoid**: "Here is a link to the crime dataset that might help"
 - Review every data source and confirm the generation node produces confident, specific answers
-- add reranker
+- ~~add reranker~~ ✅ shipped — Cohere `rerank-english-v3.0` in `app/graph/nodes/reranker.py`, with a low-relevance score threshold and rerank scores attached as LangSmith run metadata
 
 ### Response Speed
 - Measure p50 and p95 latency before sharing publicly
@@ -90,7 +102,20 @@ With Redis memory in place, ensure multi-turn actually works well end to end.
 
 ---
 
-## PDF Knowledge Base (new collection + ingestion pipeline)
+## PDF Knowledge Base (new collection + ingestion pipeline) — ✅ SHIPPED
+
+> **Shipped and live in prod as of 2026-06 (through PR #43).** Everything
+> below was built essentially as designed: admin auth (`app/admin.py`),
+> signed-URL upload, GCS → Pub/Sub → separate `worker/` Cloud Run service,
+> parent/child chunking, and catalog+KB retrieval fan-out with Cohere rerank.
+> Kept in full because it documents *why* each choice was made — several were
+> non-obvious and shouldn't be re-litigated.
+>
+> **One consequence worth knowing:** `document_id` is timestamped, so
+> re-uploading a corrected PDF **duplicates** rather than replaces it.
+> Removal is a manual Qdrant filter-delete; there's no delete/replace utility
+> yet. (The later page ingest fixed this for itself by using a stable
+> URL-based `document_id`.)
 
 Add a second Qdrant collection for long-form legal/public PDFs from the City of
 Denver — municipal code, council backgrounders, budget, financial reports.
@@ -482,7 +507,14 @@ PDFs first because they're the most common civic format. Images / scanned
 forms / Excel come later once the pipeline shape is settled and the worker /
 DLQ / idempotency mechanics are proven.
 
-### Source URLs to ingest
+### Source URLs to ingest — 🚧 IN FLIGHT (as HTML pages, not PDFs)
+
+> These became the `PAGES` list in `scripts/ingest_denvergov_pages.py`.
+> Checkbook (JS SPA) and Municode (huge separate corpus) are deferred — both
+> need a different ingestion shape. See § "Knowledge base source expansion"
+> below for why this became an HTML-page ingest, and `NEXT_STEPS.md` § 1 for
+> exactly where it's paused.
+
 - https://www.denvergov.org/Government/Agencies-Departments-Offices/Agencies-Departments-Offices-Directory/Denver-City-Council/Press-Room/press-reference/city-council-backgrounder
 - https://library.municode.com/co/denver/codes/code_of_ordinances?nodeId=REMUCOCODECO
 - https://www.denvergov.org/Government/Legislation-and-Transparency/Transparent-Denver
@@ -491,6 +523,84 @@ DLQ / idempotency mechanics are proven.
 - https://www.denvergov.org/Government/Agencies-Departments-Offices/Agencies-Departments-Offices-Directory/Department-of-Finance/Financial-Reports
 - https://www.denvergov.org/Government/Legislation-and-Transparency/Transparent-Denver/Investments-Debt
 - https://www.denvergov.org/Government/Agencies-Departments-Offices/Agencies-Departments-Offices-Directory/Denver-Clerk-and-Recorder/Recording-Division/find-records
+
+---
+
+## Knowledge base source expansion — decision (2026-06-08)
+
+Once the PDF Knowledge Base shipped, the next feature was a **new knowledge
+source**. Two candidates were raised and compared. **Decision: build A first,
+defer B.**
+
+Both fit cleanly now that retrieval + rerank is mature — adding a source is
+mostly ingest plus provenance/citation work, not a graph change. The retriever
+already fans out to the KB collection and the reranker already merges mixed
+provenance.
+
+### Candidate A — denvergov.org pages missed by web search ✅ CHOSEN
+
+City pages the Tavily `search_denver_gov` tool doesn't reliably surface.
+
+**Why first:** lowest effort by a wide margin. It's the PDF KB pipeline with
+HTML-in instead of PDF-in — everything downstream (chunk → embed → KB
+collection → hybrid retrieval → Cohere rerank → cite) is already built and
+reused verbatim. The only genuinely new code is "fetch URL, strip HTML to main
+text."
+
+**Decisions made during the build:**
+- **Curated URL list, not a sitemap crawl.** Six hand-picked pages from
+  § "Source URLs to ingest". Crawling is a later call if the curated set
+  proves too narrow.
+- **Bypass the admin-upload pipeline entirely.** No frontend, no signed URL,
+  no GCS, no Pub/Sub. The trigger mechanism doesn't apply: there's no file, so
+  there's no GCS object, so there's no `object.finalize` to fire on. Routing
+  pages through it would mean writing a scraped page to GCS as a fake PDF and
+  waiting for a notification about a file we just created ourselves. The
+  script imports `worker/pipeline` directly and writes from the CLI.
+- **Stable `document_id` = the page URL.** Re-fetching overwrites in place,
+  which makes a scheduled re-fetch idempotent for free. This is deliberately
+  *unlike* the PDF path's timestamped ids, whose duplicate-on-re-upload
+  behavior is a known wart.
+- **`doc_type="denvergov_page"`** as the downstream discriminator, in the same
+  KB collection rather than a third collection — same reasoning as
+  "Category, not collection" above.
+- **Dry-run by default.** `--write` is opt-in. The dry-run surfaced that two
+  of the six pages extract to near-nothing, which is exactly the kind of thing
+  you want to see before writing to a live collection.
+
+### Candidate B — targeted Reddit data ⏸ DEFERRED
+
+Lived-experience local knowledge — neighborhood vibes, recommendations — that
+no official dataset has. Higher ceiling, higher risk.
+
+**Deferred, and not for effort reasons.** The ingestion side is nearly
+identical to page ingest. Three other things gate it:
+
+1. **Access path is unresolved — settle this before any build.** The
+   post-2023 official Reddit API is paid and rate-limited, and scraping
+   violates ToS. The options are: official API with PRAW credentials, a
+   licensed dataset, or skip. This question alone determines feasibility, and
+   no answer has been chosen.
+2. **Provenance is a design problem, not a metadata field.** Reddit is
+   anecdote, not authority. It needs its own `source_collection` and a
+   generator that labels and hedges it — "Denver residents on Reddit
+   suggest…" — and must never blend into factual civic claims sitting beside
+   crime statistics and ACS demographics. That's prompt and citation design
+   work, not ingestion work.
+3. **Freshness.** Threads age; recency filtering matters. "Targeted" means
+   hand-picked subs, threads, and topics — not a firehose.
+
+### Why this ordering matters beyond these two
+
+The two citation changes blocking Candidate A (see `NEXT_STEPS.md` § 1) are
+the moment the KB collection stops being PDF-shaped. Downstream code currently
+assumes "KB document = uploaded PDF" in exactly two places — the sources
+payload and the generator's citation formatting. Every future non-PDF source,
+Reddit included, hits those same two branch points.
+
+So Candidate A isn't just the cheaper feature; it establishes the
+multi-provenance pattern the KB needs anyway. Write those branches generally,
+keyed on `doc_type`, rather than as a one-off patch.
 
 ---
 
@@ -523,7 +633,7 @@ Frame around the technical stack and what you learned:
 ## V2 Technical Improvements (Longer Term)
 
 - **Semantic query cache** — Redis-backed cache to avoid redundant LLM calls for similar queries
-- **Re-ranker** — metadata boost re-ranker first as a quick quality win on the catalog alone. Cross-encoder becomes load-bearing once the PDF Knowledge Base ships (see that section) — it's the merge step for parallel catalog + KB retrieval, not just polish.
+- ~~**Re-ranker**~~ ✅ SHIPPED — went straight to the Cohere cross-encoder rather than the metadata-boost interim step, since the PDF KB landed at the same time and made it load-bearing as the merge step for parallel catalog + KB retrieval.
 - **Neighborhood alias dictionary** — map colloquial names (RiNo, LoDo, LoHi, Wash Park) to official names
 - **CLI tool** — wrap ingest and query scripts into a `bluecypher` CLI for other city datasets
 - **User document upload** — personal context layer (lease, insurance policy) cross-referenced with civic data
