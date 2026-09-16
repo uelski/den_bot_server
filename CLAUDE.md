@@ -11,10 +11,10 @@ scrapes child layers dynamically.
 ## Stack
 - **LangGraph**: Orchestrator agent graph with conditional routing
 - **LangChain**: Retrieval, embeddings, LLM calls
-- **Qdrant**: Vector DB (local Docker → GKE)
+- **Qdrant**: Vector DB (local Docker → Qdrant Cloud, managed)
 - **FastAPI**: Streaming API layer
-- **Embeddings**: Google text-embedding-004 (dense) + BM25 (sparse) = hybrid retrieval
-- **LLM**: Google gemini-3.1-flash-lite-preview 
+- **Embeddings**: Google gemini-embedding-001 (dense, 3072-dim) + BM25 (sparse) = hybrid retrieval
+- **LLM**: Google gemini-2.5-flash — the default in every node; override with `GEMINI_MODEL`
 
 ## Data
 - Source: `data/enriched_denver_catalog_cleaned.json`
@@ -38,9 +38,33 @@ State → Retrieve → Grade → [Generate | Scrape → Generate]
 - If graded docs are relevant AND query needs field detail → scrape → generate
 - If no relevant docs → rewrite query → retrieve (max 2 retries)
 
+## Agent Tools
+`app/tools/registry.py` is the single registry and the cleanest seam for driving
+this system programmatically — the tools are plain functions with `@tool`
+decorators, importable without standing up FastAPI or the graph.
+
+Adding one is: write the function, `@tool`-decorate it, append to `AGENT_TOOLS`.
+No graph or router changes.
+
+| Tool | Backing service |
+|---|---|
+| `get_neighborhood_weather` | NWS |
+| `get_rtd_service_alerts` | RTD GTFS-realtime |
+| `get_rtd_next_arrivals` | RTD GTFS-realtime |
+| `get_rtd_vehicle_positions` | RTD GTFS-realtime |
+| `search_denver_gov` | Tavily |
+
 ## API
-- POST /query — body: {query: str}, response: streaming text/event-stream
+Full surface (`app/main.py` + three routers). Relevant if you're driving this
+service from the outside rather than importing it.
+
+- POST /query — body: {query: str, thread_id?: str}, response: streaming text/event-stream
 - GET /health
+- POST /feedback — Resend-backed; 503s without RESEND_API_KEY
+- GET /knowledge-base/documents — list ingested KB documents
+- GET /knowledge-base/documents/download — signed download URL (file-backed docs only)
+- POST /admin/validate-password — lets the frontend gate its admin UI
+- POST /admin/pdf-upload-url — short-TTL signed upload URL, metadata baked into the signature
 - GET /ping — keepalive that touches Qdrant + Redis so the free-tier managed resources aren't reaped for inactivity; hit on a schedule by GCP Cloud Scheduler (see app/keepalive.py)
 
 ## Environment Variables (.env)
